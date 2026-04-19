@@ -11,6 +11,7 @@ from tkinter.scrolledtext import ScrolledText
 
 
 ROOT_DIR = Path(__file__).resolve().parent
+APP_VERSION = "Version 1.0"
 
 
 class ScanRowEditor(ttk.Frame):
@@ -116,7 +117,7 @@ class ScanRowEditor(ttk.Frame):
 class CfxGui(ttk.Frame):
     def __init__(self, master: tk.Tk):
         super().__init__(master, padding=12)
-        self.master.title("CFX 扫描启动器")
+        self.master.title(f"CFX 扫描启动器 {APP_VERSION}")
         self.master.geometry("980x760")
         self.grid(sticky="nsew")
         master.columnconfigure(0, weight=1)
@@ -150,7 +151,10 @@ class CfxGui(ttk.Frame):
 
         ttk.Label(path_frame, text="CPU 核数").grid(row=5, column=0, sticky="w", pady=4)
         ttk.Entry(path_frame, textvariable=self.cores_var, width=12).grid(row=5, column=1, sticky="w", pady=4)
-        ttk.Label(path_frame, textvariable=self.status_var, foreground="#444").grid(row=5, column=2, sticky="e", padx=(8, 0))
+        version_status = ttk.Frame(path_frame)
+        version_status.grid(row=5, column=2, sticky="e", padx=(8, 0))
+        ttk.Label(version_status, text=APP_VERSION, foreground="#444").pack(side=tk.LEFT, padx=(0, 12))
+        ttk.Label(version_status, textvariable=self.status_var, foreground="#444").pack(side=tk.LEFT)
 
         scan_frame = ttk.LabelFrame(self, text="扫描点表格", padding=10)
         scan_frame.grid(row=1, column=0, sticky="nsew", pady=(12, 0))
@@ -174,6 +178,7 @@ class CfxGui(ttk.Frame):
         action_frame.grid(row=2, column=0, sticky="ew", pady=(12, 0))
         ttk.Button(action_frame, text="开始扫描", command=self._start_scan).pack(side=tk.LEFT)
         ttk.Button(action_frame, text="仅保存扫描 CSV", command=self._export_scan_csv).pack(side=tk.LEFT, padx=(8, 0))
+        ttk.Label(action_frame, text=f"界面版本：{APP_VERSION}").pack(side=tk.RIGHT)
 
         log_frame = ttk.LabelFrame(self, text="运行日志", padding=10)
         log_frame.grid(row=3, column=0, sticky="nsew", pady=(12, 0))

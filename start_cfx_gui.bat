@@ -2,7 +2,7 @@
 setlocal
 
 cd /d "%~dp0"
-title CFX GUI Launcher
+title CFX 扫描启动器 Version 1.0
 
 where py >nul 2>nul
 if %errorlevel%==0 (
