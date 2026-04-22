@@ -127,8 +127,8 @@ class CfxGui(ttk.Frame):
         self.temp_csv_path: Path | None = None
 
         self.working_dir_var = tk.StringVar(value=str(ROOT_DIR))
-        self.def_file_var = tk.StringVar(value=str(ROOT_DIR / "base.def"))
-        self.base_ccl_var = tk.StringVar(value=str(ROOT_DIR / "base.ccl"))
+        self.def_file_var = tk.StringVar(value="")
+        self.base_ccl_var = tk.StringVar(value="")
         self.output_csv_var = tk.StringVar(value=str(ROOT_DIR / "Compressor_Map_Data.csv"))
         self.scan_csv_var = tk.StringVar(value=str(ROOT_DIR / "scan_points.csv"))
         self.cores_var = tk.StringVar(value="8")
@@ -270,8 +270,12 @@ class CfxGui(ttk.Frame):
 
         if not working_dir.is_dir():
             raise ValueError(f"工作目录不存在: {working_dir}")
+        if not str(def_file).strip() or str(def_file) == ".":
+            raise ValueError("请先选择 DEF 文件。")
         if not def_file.is_file():
             raise ValueError(f"DEF 文件不存在: {def_file}")
+        if not str(base_ccl).strip() or str(base_ccl) == ".":
+            raise ValueError("请先选择 Base CCL 文件。")
         if not base_ccl.is_file():
             raise ValueError(f"Base CCL 不存在: {base_ccl}")
         if not output_csv.parent.exists():

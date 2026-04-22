@@ -8,8 +8,10 @@
 - [cfx_gui.py](/Users/hao/code/workingmap/cfx_gui.py)：中文图形界面，版本号为 `Version 1.0`。
 - [start_cfx_gui.bat](/Users/hao/code/workingmap/start_cfx_gui.bat)：Windows 下一键启动 GUI。
 - [scan_points.csv](/Users/hao/code/workingmap/scan_points.csv)：默认扫描点配置文件。
-- [base.def](/Users/hao/code/workingmap/base.def)：默认 `def` 输入文件。
-- [base.ccl](/Users/hao/code/workingmap/base.ccl)：默认基础 `ccl` 文件。
+
+说明：
+- 仓库当前不再内置 `base.def` 和 `base.ccl` 模板文件。
+- 启动 GUI 或直接运行 `cfx.ps1` 前，需要自行提供有效的 `.def` 和 `.ccl` 文件路径。
 
 ## GUI 启动
 
@@ -33,6 +35,7 @@ py -3 cfx_gui.py
   - `%LocalAppData%\Programs\Python\Python*`
   - `%ProgramFiles%\Python\Python*`
   - `%ProgramFiles(x86)%\Python\Python*`
+- 首次启动后，请在 GUI 中手动选择要使用的 `DEF` 与 `Base CCL` 文件
 - 目标环境中可调用 PowerShell 和 ANSYS CFX 相关命令
 
 如果仍提示找不到 Python，优先检查 Windows 安装器是否勾选了 `Add python.exe to PATH`，然后重新打开终端或重新双击 `start_cfx_gui.bat`。
@@ -72,4 +75,4 @@ SpeedRPM,InitialPressurePa
 ## 说明
 
 - `.gitignore` 已默认忽略常见结果文件、缓存文件和大体积输出。
-- 当前仓库保留核心输入模板与脚本文件，便于版本管理。
+- 当前仓库保留核心脚本与 GUI 文件，模板输入文件需由使用方自行提供。

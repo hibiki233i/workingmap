@@ -7,8 +7,8 @@
 # ==============================================================================
 
 param(
-    [string]$DefFile = "base.def",
-    [string]$BaseCclFile = "base.ccl",
+    [string]$DefFile = "",
+    [string]$BaseCclFile = "",
     [string]$CsvFile = "Compressor_Map_Data.csv",
     [string]$SpeedPressureTablePath = "scan_points.csv",
     [int]$Cores = 8,
@@ -52,6 +52,14 @@ $defFile = Resolve-ConfigPath -Path $DefFile
 $baseCclFile = Resolve-ConfigPath -Path $BaseCclFile
 $csvFile = Resolve-ConfigPath -Path $CsvFile -AllowMissing
 $speedPressureTablePath = Resolve-ConfigPath -Path $SpeedPressureTablePath
+
+if ([string]::IsNullOrWhiteSpace($defFile)) {
+    throw "未指定 DEF 文件。请通过 -DefFile 传入有效的 .def 文件路径。"
+}
+
+if ([string]::IsNullOrWhiteSpace($baseCclFile)) {
+    throw "未指定 Base CCL 文件。请通过 -BaseCclFile 传入有效的 .ccl 文件路径。"
+}
 
 if ($Cores -le 0) {
     throw "Cores 必须大于 0。"
