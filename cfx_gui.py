@@ -173,6 +173,7 @@ class CfxGui(ttk.Frame):
         self.working_dir_var = tk.StringVar(value=str(ROOT_DIR))
         self.def_file_var = tk.StringVar(value="")
         self.base_ccl_var = tk.StringVar(value="")
+        self.initial_res_var = tk.StringVar(value="")
         self.output_csv_var = tk.StringVar(value=str(ROOT_DIR / "Compressor_Map_Data.csv"))
         self.scan_csv_var = tk.StringVar(value=str(ROOT_DIR / "scan_points.csv"))
         self.cores_var = tk.StringVar(value="8")
@@ -190,13 +191,14 @@ class CfxGui(ttk.Frame):
         self._add_path_row(path_frame, 0, "工作目录", self.working_dir_var, self._browse_directory)
         self._add_path_row(path_frame, 1, "DEF 文件", self.def_file_var, lambda: self._browse_file(self.def_file_var, [("DEF files", "*.def"), ("All files", "*.*")]))
         self._add_path_row(path_frame, 2, "Base CCL", self.base_ccl_var, lambda: self._browse_file(self.base_ccl_var, [("CCL files", "*.ccl"), ("All files", "*.*")]))
-        self._add_path_row(path_frame, 3, "输出 CSV", self.output_csv_var, self._browse_output_csv)
-        self._add_path_row(path_frame, 4, "扫描 CSV", self.scan_csv_var, self._browse_scan_csv)
+        self._add_path_row(path_frame, 3, "初场 RES", self.initial_res_var, lambda: self._browse_file(self.initial_res_var, [("RES files", "*.res"), ("All files", "*.*")]))
+        self._add_path_row(path_frame, 4, "输出 CSV", self.output_csv_var, self._browse_output_csv)
+        self._add_path_row(path_frame, 5, "扫描 CSV", self.scan_csv_var, self._browse_scan_csv)
 
-        ttk.Label(path_frame, text="CPU 核数").grid(row=5, column=0, sticky="w", pady=4)
-        ttk.Entry(path_frame, textvariable=self.cores_var, width=12).grid(row=5, column=1, sticky="w", pady=4)
+        ttk.Label(path_frame, text="CPU 核数").grid(row=6, column=0, sticky="w", pady=4)
+        ttk.Entry(path_frame, textvariable=self.cores_var, width=12).grid(row=6, column=1, sticky="w", pady=4)
         version_status = ttk.Frame(path_frame)
-        version_status.grid(row=5, column=2, sticky="e", padx=(8, 0))
+        version_status.grid(row=6, column=2, sticky="e", padx=(8, 0))
         ttk.Label(version_status, text=APP_VERSION, foreground="#444").pack(side=tk.LEFT, padx=(0, 12))
         ttk.Label(version_status, textvariable=self.status_var, foreground="#444").pack(side=tk.LEFT)
 
@@ -309,6 +311,8 @@ class CfxGui(ttk.Frame):
         working_dir = Path(self.working_dir_var.get()).expanduser()
         def_file = Path(self.def_file_var.get()).expanduser()
         base_ccl = Path(self.base_ccl_var.get()).expanduser()
+        initial_res_text = self.initial_res_var.get().strip()
+        initial_res = Path(initial_res_text).expanduser() if initial_res_text else None
         output_csv = Path(self.output_csv_var.get()).expanduser()
         scan_csv = Path(self.scan_csv_var.get()).expanduser()
 
@@ -322,6 +326,8 @@ class CfxGui(ttk.Frame):
             raise ValueError("请先选择 Base CCL 文件。")
         if not base_ccl.is_file():
             raise ValueError(f"Base CCL 不存在: {base_ccl}")
+        if initial_res is not None and not initial_res.is_file():
+            raise ValueError(f"初场 RES 文件不存在: {initial_res}")
         if not output_csv.parent.exists():
             raise ValueError(f"输出 CSV 目录不存在: {output_csv.parent}")
         if scan_csv and not scan_csv.parent.exists():
@@ -339,6 +345,7 @@ class CfxGui(ttk.Frame):
             "working_dir": str(working_dir),
             "def_file": str(def_file),
             "base_ccl": str(base_ccl),
+            "initial_res": str(initial_res) if initial_res is not None else "",
             "output_csv": str(output_csv),
             "scan_csv": str(scan_csv),
             "cores": str(cores),
@@ -402,6 +409,8 @@ class CfxGui(ttk.Frame):
             str(payload["def_file"]),
             "-BaseCclFile",
             str(payload["base_ccl"]),
+            "-InitialResFile",
+            str(payload["initial_res"]),
             "-CsvFile",
             str(payload["output_csv"]),
             "-SpeedPressureTablePath",

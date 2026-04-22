@@ -12,6 +12,7 @@
 说明：
 - 仓库当前不再内置 `base.def` 和 `base.ccl` 模板文件。
 - 启动 GUI 或直接运行 `cfx.ps1` 前，需要自行提供有效的 `.def` 和 `.ccl` 文件路径。
+- 如需指定求解初场，可额外提供可选的 `.res` 文件路径。
 
 ## GUI 启动
 
@@ -36,6 +37,7 @@ py -3 cfx_gui.py
   - `%ProgramFiles%\Python\Python*`
   - `%ProgramFiles(x86)%\Python\Python*`
 - 首次启动后，请在 GUI 中手动选择要使用的 `DEF` 与 `Base CCL` 文件
+- 如需从指定初场启动，可在 GUI 中选择可选的 `RES` 文件
 - 目标环境中可调用 PowerShell 和 ANSYS CFX 相关命令
 
 如果仍提示找不到 Python，优先检查 Windows 安装器是否勾选了 `Add python.exe to PATH`，然后重新打开终端或重新双击 `start_cfx_gui.bat`。
@@ -66,6 +68,7 @@ SpeedRPM,InitialPressurePa
 ```powershell
 -DefFile <string>
 -BaseCclFile <string>
+-InitialResFile <string>
 -CsvFile <string>
 -SpeedPressureTablePath <string>
 -Cores <int>

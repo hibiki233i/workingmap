@@ -9,6 +9,7 @@
 param(
     [string]$DefFile = "",
     [string]$BaseCclFile = "",
+    [string]$InitialResFile = "",
     [string]$CsvFile = "Compressor_Map_Data.csv",
     [string]$SpeedPressureTablePath = "scan_points.csv",
     [int]$Cores = 8,
@@ -50,6 +51,7 @@ function Resolve-ConfigPath {
 
 $defFile = Resolve-ConfigPath -Path $DefFile
 $baseCclFile = Resolve-ConfigPath -Path $BaseCclFile
+$initialResFile = Resolve-ConfigPath -Path $InitialResFile -AllowMissing
 $csvFile = Resolve-ConfigPath -Path $CsvFile -AllowMissing
 $speedPressureTablePath = Resolve-ConfigPath -Path $SpeedPressureTablePath
 
@@ -640,6 +642,7 @@ $scanConfig = @(Import-ScanConfig -Path $speedPressureTablePath)
 Write-Host "工作目录: $(Get-Location)" -ForegroundColor DarkGray
 Write-Host "DEF 文件: $defFile" -ForegroundColor DarkGray
 Write-Host "基础 CCL: $baseCclFile" -ForegroundColor DarkGray
+Write-Host "初始场文件: $(if ($initialResFile) { $initialResFile } else { '未指定' })" -ForegroundColor DarkGray
 Write-Host "结果 CSV: $csvFile" -ForegroundColor DarkGray
 Write-Host "扫描配置: $speedPressureTablePath" -ForegroundColor DarkGray
 Write-Host "扫描点数量: $($scanConfig.Count)" -ForegroundColor DarkGray
@@ -649,7 +652,7 @@ for ($i = 0; $i -lt $scanConfig.Count; $i++) {
     $speed = [int]$scanConfig[$i].SpeedRPM
     $currentPressure = [double]$scanConfig[$i].InitialPressurePa
     $deltaP = [double]$initialDeltaP
-    $currentInitRes = ""
+    $currentInitRes = $initialResFile
     $lastStablePoint = $null
     $stableHistory = @()
     $refineCount = 0
