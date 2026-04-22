@@ -282,7 +282,7 @@ function Invoke-CfxSolveForPoint {
     } else {
         Write-Host "  -> [计算中] 无可用初始场，从零场启动 | 并行核数: $cores"
     }
-    $argList += @("-name", $runName, "-par-local", "-part", "$cores", "-batch")
+    $argList += @("-name", $runName,"double", "-par-local", "-part", "$cores", "-batch")
 
     $process = Start-Process -FilePath "cfx5solve" -ArgumentList $argList -PassThru
     $monitorStopped = $false
