@@ -7,15 +7,24 @@ title CFX 扫描启动器 Version 1.0
 set "GUI_SCRIPT=%~dp0cfx_gui.py"
 set "PYTHON_CMD="
 set "PYTHON_ARGS="
+set "PYTHON_IS_PATH_CMD="
 
 call :find_python
 if not defined PYTHON_CMD goto :python_not_found
 
 echo [INFO] Using Python: %PYTHON_CMD% %PYTHON_ARGS%
-if defined PYTHON_ARGS (
-    "%PYTHON_CMD%" %PYTHON_ARGS% "%GUI_SCRIPT%"
+if /I "%PYTHON_IS_PATH_CMD%"=="1" (
+    if defined PYTHON_ARGS (
+        %PYTHON_CMD% %PYTHON_ARGS% "%GUI_SCRIPT%"
+    ) else (
+        %PYTHON_CMD% "%GUI_SCRIPT%"
+    )
 ) else (
-    "%PYTHON_CMD%" "%GUI_SCRIPT%"
+    if defined PYTHON_ARGS (
+        "%PYTHON_CMD%" %PYTHON_ARGS% "%GUI_SCRIPT%"
+    ) else (
+        "%PYTHON_CMD%" "%GUI_SCRIPT%"
+    )
 )
 
 if errorlevel 1 (
@@ -31,22 +40,25 @@ where py >nul 2>nul
 if %errorlevel%==0 (
     set "PYTHON_CMD=py"
     set "PYTHON_ARGS=-3"
+    set "PYTHON_IS_PATH_CMD=1"
     goto :eof
 )
 
 where python >nul 2>nul
 if %errorlevel%==0 (
     set "PYTHON_CMD=python"
+    set "PYTHON_IS_PATH_CMD=1"
     goto :eof
 )
 
 where python3 >nul 2>nul
 if %errorlevel%==0 (
     set "PYTHON_CMD=python3"
+    set "PYTHON_IS_PATH_CMD=1"
     goto :eof
 )
 
-call :probe_python_dir "%LocalAppData%\Local\Python"
+call :probe_python_dir "%LocalAppData%\Programs\Python"
 if defined PYTHON_CMD goto :eof
 
 call :probe_python_dir "%ProgramFiles%\Python"
@@ -54,6 +66,16 @@ if defined PYTHON_CMD goto :eof
 
 call :probe_python_dir "%ProgramFiles(x86)%\Python"
 if defined PYTHON_CMD goto :eof
+
+call :probe_python_dir "%UserProfile%\AppData\Local\Programs\Python"
+if defined PYTHON_CMD goto :eof
+
+if exist "%LocalAppData%\Microsoft\WindowsApps\python.exe" (
+    set "PYTHON_CMD=%LocalAppData%\Microsoft\WindowsApps\python.exe"
+    set "PYTHON_ARGS="
+    set "PYTHON_IS_PATH_CMD="
+    goto :eof
+)
 
 goto :eof
 
@@ -66,6 +88,7 @@ for /d %%D in ("%SEARCH_ROOT%\Python*") do (
     if exist "%%~fD\python.exe" (
         set "PYTHON_CMD=%%~fD\python.exe"
         set "PYTHON_ARGS="
+        set "PYTHON_IS_PATH_CMD="
         goto :eof
     )
 )
