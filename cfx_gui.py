@@ -29,9 +29,27 @@ class ScanRowEditor(ttk.Frame):
         header.columnconfigure(1, weight=1)
         header.columnconfigure(2, weight=1)
 
-        self.rows_frame = ttk.Frame(self)
-        self.rows_frame.grid(row=1, column=0, sticky="nsew")
+        self.rowconfigure(1, weight=1)
         self.columnconfigure(0, weight=1)
+
+        body = ttk.Frame(self)
+        body.grid(row=1, column=0, sticky="nsew")
+        body.columnconfigure(0, weight=1)
+        body.rowconfigure(0, weight=1)
+
+        self.canvas = tk.Canvas(body, highlightthickness=0)
+        self.canvas.grid(row=0, column=0, sticky="nsew")
+
+        scrollbar = ttk.Scrollbar(body, orient="vertical", command=self.canvas.yview)
+        scrollbar.grid(row=0, column=1, sticky="ns")
+        self.canvas.configure(yscrollcommand=scrollbar.set)
+
+        self.rows_frame = ttk.Frame(self.canvas)
+        self.canvas_window = self.canvas.create_window((0, 0), window=self.rows_frame, anchor="nw")
+
+        self.rows_frame.bind("<Configure>", self._sync_scroll_region)
+        self.canvas.bind("<Configure>", self._resize_canvas_window)
+        self.canvas.bind_all("<MouseWheel>", self._on_mousewheel, add="+")
 
     def set_rows(self, rows: list[tuple[str, str]]) -> None:
         for widgets in list(self.rows):
@@ -79,6 +97,7 @@ class ScanRowEditor(ttk.Frame):
         self._refresh_indices()
         if trigger_change:
             self.on_change()
+        self.canvas.after_idle(lambda: self.canvas.yview_moveto(1.0))
 
     def delete_row(self, index: int) -> None:
         if not 0 <= index < len(self.rows):
@@ -103,6 +122,29 @@ class ScanRowEditor(ttk.Frame):
     def _refresh_indices(self) -> None:
         for index, widgets in enumerate(self.rows):
             widgets["index_label"].configure(text=str(index + 1))
+
+    def _sync_scroll_region(self, _event=None) -> None:
+        self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+
+    def _resize_canvas_window(self, event: tk.Event) -> None:
+        self.canvas.itemconfigure(self.canvas_window, width=event.width)
+
+    def _on_mousewheel(self, event: tk.Event) -> None:
+        widget = self.winfo_containing(event.x_root, event.y_root)
+        if widget is None or not self._is_descendant(widget):
+            return
+        delta = event.delta
+        if delta == 0:
+            return
+        self.canvas.yview_scroll(int(-delta / 120), "units")
+
+    def _is_descendant(self, widget: tk.Misc) -> bool:
+        current = widget
+        while current is not None:
+            if current == self:
+                return True
+            current = current.master
+        return False
 
     def get_rows(self) -> list[dict[str, str]]:
         result: list[dict[str, str]] = []
