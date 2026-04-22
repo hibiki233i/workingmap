@@ -46,7 +46,7 @@ if %errorlevel%==0 (
     goto :eof
 )
 
-call :probe_python_dir "%LocalAppData%\Programs\Python"
+call :probe_python_dir "%LocalAppData%\Local\Python"
 if defined PYTHON_CMD goto :eof
 
 call :probe_python_dir "%ProgramFiles%\Python"
