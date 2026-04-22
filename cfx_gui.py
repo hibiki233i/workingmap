@@ -1,4 +1,5 @@
 import csv
+import locale
 import os
 import shutil
 import subprocess
@@ -12,6 +13,7 @@ from tkinter.scrolledtext import ScrolledText
 
 ROOT_DIR = Path(__file__).resolve().parent
 APP_VERSION = "Version 1.0"
+LOG_ENCODING = locale.getpreferredencoding(False) or "utf-8"
 
 
 class ScanRowEditor(ttk.Frame):
@@ -368,6 +370,7 @@ class CfxGui(ttk.Frame):
 
         self._log("启动命令:")
         self._log(" ".join(command))
+        self._log(f"日志解码编码: {LOG_ENCODING}")
 
         try:
             self.process = subprocess.Popen(
@@ -376,7 +379,7 @@ class CfxGui(ttk.Frame):
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
-                encoding="utf-8",
+                encoding=LOG_ENCODING,
                 errors="replace",
             )
         except OSError as exc:
