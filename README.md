@@ -28,8 +28,14 @@ py -3 cfx_gui.py
 要求：
 
 - 已安装 Python 3
-- 系统中可调用 `py` 或 `python`
+- 启动脚本会依次尝试 `py`、`python`、`python3`
+- 如果 `PATH` 中没有 Python，启动脚本还会继续探测这些常见安装目录：
+  - `%LocalAppData%\Programs\Python\Python*`
+  - `%ProgramFiles%\Python\Python*`
+  - `%ProgramFiles(x86)%\Python\Python*`
 - 目标环境中可调用 PowerShell 和 ANSYS CFX 相关命令
+
+如果仍提示找不到 Python，优先检查 Windows 安装器是否勾选了 `Add python.exe to PATH`，然后重新打开终端或重新双击 `start_cfx_gui.bat`。
 
 ## 扫描配置格式
 
