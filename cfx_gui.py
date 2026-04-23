@@ -1,4 +1,5 @@
 import csv
+import json
 import locale
 import os
 import shutil
@@ -14,6 +15,7 @@ from tkinter.scrolledtext import ScrolledText
 ROOT_DIR = Path(__file__).resolve().parent
 APP_VERSION = "Version 1.0"
 LOG_ENCODING = locale.getpreferredencoding(False) or "utf-8"
+SETTINGS_PATH = ROOT_DIR / ".cfx_gui_settings.json"
 
 
 class ScanRowEditor(ttk.Frame):
@@ -177,11 +179,15 @@ class CfxGui(ttk.Frame):
         self.output_csv_var = tk.StringVar(value=str(ROOT_DIR / "Compressor_Map_Data.csv"))
         self.scan_csv_var = tk.StringVar(value=str(ROOT_DIR / "scan_points.csv"))
         self.cores_var = tk.StringVar(value="8")
+        self.blade_count_var = tk.StringVar(value="1")
         self.row_count_var = tk.StringVar(value="0")
         self.status_var = tk.StringVar(value="就绪")
 
         self._build_form()
+        self._load_settings()
+        self._bind_setting_traces()
         self._load_scan_csv(Path(self.scan_csv_var.get()))
+        self.master.protocol("WM_DELETE_WINDOW", self._on_close)
 
     def _build_form(self) -> None:
         path_frame = ttk.LabelFrame(self, text="路径与运行参数", padding=10)
@@ -197,8 +203,10 @@ class CfxGui(ttk.Frame):
 
         ttk.Label(path_frame, text="CPU 核数").grid(row=6, column=0, sticky="w", pady=4)
         ttk.Entry(path_frame, textvariable=self.cores_var, width=12).grid(row=6, column=1, sticky="w", pady=4)
+        ttk.Label(path_frame, text="叶片数").grid(row=7, column=0, sticky="w", pady=4)
+        ttk.Entry(path_frame, textvariable=self.blade_count_var, width=12).grid(row=7, column=1, sticky="w", pady=4)
         version_status = ttk.Frame(path_frame)
-        version_status.grid(row=6, column=2, sticky="e", padx=(8, 0))
+        version_status.grid(row=7, column=2, sticky="e", padx=(8, 0))
         ttk.Label(version_status, text=APP_VERSION, foreground="#444").pack(side=tk.LEFT, padx=(0, 12))
         ttk.Label(version_status, textvariable=self.status_var, foreground="#444").pack(side=tk.LEFT)
 
@@ -263,6 +271,68 @@ class CfxGui(ttk.Frame):
         if selected:
             self.scan_csv_var.set(selected)
             self._load_scan_csv(Path(selected))
+
+    def _bind_setting_traces(self) -> None:
+        variables = [
+            self.working_dir_var,
+            self.def_file_var,
+            self.base_ccl_var,
+            self.initial_res_var,
+            self.output_csv_var,
+            self.scan_csv_var,
+            self.cores_var,
+            self.blade_count_var,
+        ]
+        for variable in variables:
+            variable.trace_add("write", lambda *_: self._save_settings())
+
+    def _load_settings(self) -> None:
+        if not SETTINGS_PATH.is_file():
+            return
+        try:
+            data = json.loads(SETTINGS_PATH.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return
+
+        mapping = {
+            "working_dir": self.working_dir_var,
+            "def_file": self.def_file_var,
+            "base_ccl": self.base_ccl_var,
+            "initial_res": self.initial_res_var,
+            "output_csv": self.output_csv_var,
+            "scan_csv": self.scan_csv_var,
+            "cores": self.cores_var,
+            "blade_count": self.blade_count_var,
+        }
+        for key, variable in mapping.items():
+            value = data.get(key)
+            if isinstance(value, str) and value.strip():
+                variable.set(value)
+
+        geometry = data.get("window_geometry")
+        if isinstance(geometry, str) and geometry.strip():
+            self.master.geometry(geometry)
+
+    def _save_settings(self) -> None:
+        payload = {
+            "working_dir": self.working_dir_var.get().strip(),
+            "def_file": self.def_file_var.get().strip(),
+            "base_ccl": self.base_ccl_var.get().strip(),
+            "initial_res": self.initial_res_var.get().strip(),
+            "output_csv": self.output_csv_var.get().strip(),
+            "scan_csv": self.scan_csv_var.get().strip(),
+            "cores": self.cores_var.get().strip(),
+            "blade_count": self.blade_count_var.get().strip(),
+            "window_geometry": self.master.winfo_geometry(),
+        }
+        try:
+            SETTINGS_PATH.write_text(json.dumps(payload, ensure_ascii=True, indent=2), encoding="utf-8")
+        except OSError:
+            pass
+
+    def _on_close(self) -> None:
+        self._save_settings()
+        self.master.destroy()
 
     def _load_scan_csv(self, path: Path) -> None:
         if not path.exists():
@@ -340,6 +410,13 @@ class CfxGui(ttk.Frame):
         if cores <= 0:
             raise ValueError("CPU 核数必须大于 0。")
 
+        try:
+            blade_count = float(self.blade_count_var.get().strip())
+        except ValueError as exc:
+            raise ValueError("叶片数必须是有效数字。") from exc
+        if blade_count <= 0:
+            raise ValueError("叶片数必须大于 0。")
+
         rows = self._collect_validated_rows()
         return {
             "working_dir": str(working_dir),
@@ -349,6 +426,7 @@ class CfxGui(ttk.Frame):
             "output_csv": str(output_csv),
             "scan_csv": str(scan_csv),
             "cores": str(cores),
+            "blade_count": str(blade_count),
             "rows": rows,
         }
 
@@ -417,6 +495,8 @@ class CfxGui(ttk.Frame):
             str(scan_csv_path),
             "-Cores",
             str(payload["cores"]),
+            "-BladeCount",
+            str(payload["blade_count"]),
         ]
 
         self._log("启动命令:")

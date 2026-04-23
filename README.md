@@ -38,6 +38,7 @@ py -3 cfx_gui.py
   - `%ProgramFiles(x86)%\Python\Python*`
 - 首次启动后，请在 GUI 中手动选择要使用的 `DEF` 与 `Base CCL` 文件
 - 如需从指定初场启动，可在 GUI 中选择可选的 `RES` 文件
+- GUI 会记住上次填写的路径、核数、叶片数以及窗口大小，保存在仓库目录下的 `.cfx_gui_settings.json`
 - 目标环境中可调用 PowerShell 和 ANSYS CFX 相关命令
 
 如果仍提示找不到 Python，优先检查 Windows 安装器是否勾选了 `Add python.exe to PATH`，然后重新打开终端或重新双击 `start_cfx_gui.bat`。
@@ -72,8 +73,14 @@ SpeedRPM,InitialPressurePa
 -CsvFile <string>
 -SpeedPressureTablePath <string>
 -Cores <int>
+-BladeCount <double>
 -WorkingDirectory <string>
 ```
+
+说明：
+
+- `BladeCount` 用于把后处理读取到的单流道质量流量换算成整机流量。
+- 当前实现不依赖从 `.res` 自动猜叶片数，而是要求用户显式输入，稳定性更高。
 
 ## 说明
 

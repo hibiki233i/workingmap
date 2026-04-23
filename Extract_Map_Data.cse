@@ -2,7 +2,7 @@
 ! $writeHeader = 0;
 ! if (! -e $outFile) { $writeHeader = 1; }
 ! open(MYCSV, ">>", $outFile) or die "??????\n";
-! if ($writeHeader) { print MYCSV "Result_File, Mass_Flow_kg_s, Static_PR, P_in_Pa, P_out_Pa, T_in_K, T_out_K\n"; }
+! if ($writeHeader) { print MYCSV "Result_File, Mass_Flow_kg_s, Static_PR, P_in_Pa, P_out_Pa, T_in_K, T_out_K, Blade_Count\n"; }
 
 ! $resFileName = "Map_Speed_8000_Press_5_001.res";
 
@@ -16,14 +16,28 @@
 !     return 0;
 ! }
 
+! sub get_mass_flow_kg_s {
+!     my $raw = shift // "";
+!     my $value = get_num($raw);
+!     my $unit = $raw;
+!     $unit =~ s/^\s*[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?\s*//;
+!     $unit = lc($unit);
+!     $unit =~ s/[\[\]\(\)\{\}\s]//g;
+!
+!     if ($unit =~ /^g(?:\/s|s-1|s\^-1|persecond|\/sec|\/second)$/) {
+!         return $value / 1000.0;
+!     }
+!     return $value;
+! }
+
 # ??????? get_num ???
-! $massFlow = get_num(evaluate("-massFlow()\@R1 Outlet"));
+! $massFlow = get_mass_flow_kg_s(evaluate("-massFlow()\@R1 Outlet"));
 ! $p_in    = get_num(evaluate("massFlowAve(Pressure)\@R1 Inlet"));
 ! $p_out   = get_num(evaluate("massFlowAve(Pressure)\@R1 Outlet"));
 ! $PR      = ($p_in == 0) ? 0 : ($p_out / $p_in);
 ! $t_in    = get_num(evaluate("massFlowAve(Temperature)\@R1 Inlet"));
 ! $t_out   = get_num(evaluate("massFlowAve(Temperature)\@R1 Outlet"));
 
-! printf MYCSV ("%s, %.6f, %.4f, %.4f, %.4f, %.4f, %.4f\n", $resFileName, $massFlow, $PR, $p_in, $p_out, $t_in, $t_out);
+! printf MYCSV ("%s, %.6f, %.4f, %.4f, %.4f, %.4f, %.4f, %.6f\n", $resFileName, $massFlow, $PR, $p_in, $p_out, $t_in, $t_out, 1.0);
 ! close(MYCSV);
 > quit

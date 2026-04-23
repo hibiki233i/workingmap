@@ -11,12 +11,13 @@ __pycache__/
 *.bak
 *.backup_*
 *.legacy_no_eff_*.bak
+*.legacy_upgrade_*.bak
 
 temp_*.ccl
 __Batch_Extract_Map_Data.cse
 __temp_extract.csv
+.cfx_gui_settings.json
 
 Compressor_Map_Data.csv
 Extracted_Compressor_Data.csv
 Compressor_Map_With_Efficiency.png
-

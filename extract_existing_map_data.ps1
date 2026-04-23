@@ -6,8 +6,13 @@
 # ==============================================================================
 
 param(
-    [string]$CsvFile = "Compressor_Map_Data.csv"
+    [string]$CsvFile = "Compressor_Map_Data.csv",
+    [double]$BladeCount = 1.0
 )
+
+if ($BladeCount -le 0) {
+    throw "BladeCount 必须大于 0。"
+}
 
 $cseFile = "__Batch_Extract_Map_Data.cse"
 
@@ -25,7 +30,7 @@ if (Test-Path $CsvFile) {
     Write-Host "已备份旧数据表到: $backupPath" -ForegroundColor Yellow
 }
 
-"Result_File,Mass_Flow_kg_s,Static_PR,P_in_Pa,P_out_Pa,T_in_K,T_out_K,Isentropic_Efficiency" | Out-File -FilePath $CsvFile -Encoding ASCII
+"Result_File,Mass_Flow_kg_s,Static_PR,P_in_Pa,P_out_Pa,T_in_K,T_out_K,Isentropic_Efficiency,Blade_Count" | Out-File -FilePath $CsvFile -Encoding ASCII
 
 Write-Host "找到 $($resFiles.Count) 个 .res 文件，开始离线提取..." -ForegroundColor Cyan
 
@@ -46,7 +51,21 @@ foreach ($file in $resFiles) {
 !     return 0;
 ! }
 
-! `$massFlow = get_num(evaluate("-massFlow()\@R1 Outlet"));
+! sub get_mass_flow_kg_s {
+!     my `$raw = shift // "";
+!     my `$value = get_num(`$raw);
+!     my `$unit = `$raw;
+!     `$unit =~ s/^\s*[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?\s*//;
+!     `$unit = lc(`$unit);
+!     `$unit =~ s/[\[\]\(\)\{\}\s]//g;
+!
+!     if (`$unit =~ /^g(?:\/s|s-1|s\^-1|persecond|\/sec|\/second)$/) {
+!         return `$value / 1000.0;
+!     }
+!     return `$value;
+! }
+
+! `$massFlow = get_mass_flow_kg_s(evaluate("-massFlow()\@R1 Outlet"));
 ! `$p_in    = get_num(evaluate("massFlowAve(Pressure)\@R1 Inlet"));
 ! `$p_out   = get_num(evaluate("massFlowAve(Pressure)\@R1 Outlet"));
 ! `$PR      = (`$p_in == 0) ? 0 : (`$p_out / `$p_in);
@@ -54,7 +73,7 @@ foreach ($file in $resFiles) {
 ! `$t_out   = get_num(evaluate("massFlowAve(Temperature)\@R1 Outlet"));
 ! `$is_eff  = get_num(evaluate("massFlowAve(Isentropic Compression Efficiency)\@R1 Outlet"));
 
-! printf MYCSV ("%s,%.6f,%.4f,%.4f,%.4f,%.4f,%.4f,%.6f\n", `$currentRes, `$massFlow, `$PR, `$p_in, `$p_out, `$t_in, `$t_out, `$is_eff);
+! printf MYCSV ("%s,%.6f,%.4f,%.4f,%.4f,%.4f,%.4f,%.6f,%.6f\n", `$currentRes, `$massFlow * $BladeCount, `$PR, `$p_in, `$p_out, `$t_in, `$t_out, `$is_eff, $BladeCount);
 ! close(MYCSV);
 > quit
 "@
