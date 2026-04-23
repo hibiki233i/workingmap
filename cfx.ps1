@@ -87,8 +87,10 @@ $stepGrowFactor = 1.25
 $stepShrinkFactor = 0.5
 $relativeDropWarn = 0.03      # 流量相对下降 3% 开始缩步
 $relativeDropStrong = 0.08    # 流量相对下降 8% 视为强烈接近喘振
+$relativeDropStopAtMinStep = 0.15   # 最小步长下若单步流量骤降 >=15%，直接视为越过喘振边界
 $absoluteDropWarn_kg = 0.000005   # 0.005 g/s
 $absoluteDropStrong_kg = 0.000020 # 0.020 g/s
+$absoluteDropStopAtMinStep_kg = 0.000300 # 最小步长下若单步绝对流量骤降 >=0.3 g/s，直接停止
 $curvatureWarn = 0.000004         # 二阶差分阈值 [kg/s/Pa^2]
 $curvatureStrong = 0.000010       # 强曲率阈值 [kg/s/Pa^2]
 $slopeAmplificationWarn = 1.5     # 末段斜率相对前段放大倍数
@@ -824,6 +826,27 @@ for ($i = 0; $i -lt $scanConfig.Count; $i++) {
         $currentMassFlowKg = [double]$pointData.Mass_Flow_kg_s
         $currentPR = [double]$pointData.Static_PR
         Write-Host ("  -> 实测流量: {0:F6} kg/s ({1:F3} g/s) | 静压比: {2:F4}" -f $currentMassFlowKg, ($currentMassFlowKg * 1000.0), $currentPR)
+
+        if ($null -ne $lastStablePoint) {
+            $singleStepAbsDrop = [math]::Max(([double]$lastStablePoint.MassFlowKg - $currentMassFlowKg), 0.0)
+            $singleStepRelDrop = if ([double]$lastStablePoint.MassFlowKg -gt 0) {
+                $singleStepAbsDrop / [double]$lastStablePoint.MassFlowKg
+            } else {
+                0.0
+            }
+
+            if ($deltaP -le $minDeltaP -and (
+                $singleStepRelDrop -ge $relativeDropStopAtMinStep -or
+                $singleStepAbsDrop -ge $absoluteDropStopAtMinStep_kg
+            )) {
+                Write-Host ("  -> [边界确认] 已到最小步长 {0} Pa，当前点相对上一稳定点流量骤降 {1:P2} ({2:F3} g/s)，判定已越过喘振边界；上一稳定点 {3} Pa 视为最后有效点。" -f `
+                    $minDeltaP,
+                    $singleStepRelDrop,
+                    ($singleStepAbsDrop * 1000.0),
+                    ([double]$lastStablePoint.Pressure)) -ForegroundColor Red
+                break
+            }
+        }
 
         if ($currentMassFlowKg -le $zeroFlowThreshold_kg -or $currentPR -le 0) {
             if ($null -eq $lastStablePoint) {
