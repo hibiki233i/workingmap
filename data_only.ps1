@@ -3,12 +3,19 @@
 # ==============================================================================
 
 param(
-    [double]$BladeCount = 1.0
+    [double]$BladeCount = 1.0,
+    [string]$MassFlowUnit = "kg/s"
 )
 
 if ($BladeCount -le 0) {
     throw "BladeCount 必须大于 0。"
 }
+
+$normalizedMassFlowUnit = $MassFlowUnit.Trim().ToLowerInvariant()
+if ($normalizedMassFlowUnit -notin @("kg/s", "g/s")) {
+    throw "MassFlowUnit 只能是 kg/s 或 g/s。"
+}
+$massFlowToKgFactor = if ($normalizedMassFlowUnit -eq "g/s") { 0.001 } else { 1.0 }
 
 $csvFile = "Extracted_Compressor_Data.csv"
 $cseFile = "Batch_Extract_Macro.cse"
@@ -25,7 +32,7 @@ Write-Host "找到 $($resFiles.Count) 个结果文件，准备开始提取..." -
 
 # 初始化 CSV 表头 (如果文件不存在)
 if (-not (Test-Path $csvFile)) {
-    "Result_File,Mass_Flow_kg_s,Static_PR,P_in_Pa,P_out_Pa,T_in_K,T_out_K,Isentropic_Efficiency,Blade_Count" | Out-File -FilePath $csvFile -Encoding ASCII
+    "Result_File,Mass_Flow_kg_s,Static_PR,P_in_Pa,P_out_Pa,T_in_K,T_out_K,Isentropic_Efficiency,Blade_Count,Mass_Flow_Unit" | Out-File -FilePath $csvFile -Encoding ASCII
 }
 
 foreach ($file in $resFiles) {
@@ -49,22 +56,8 @@ foreach ($file in $resFiles) {
 !     return 0;
 ! }
 
-! sub get_mass_flow_kg_s {
-!     my `$raw = shift // "";
-!     my `$value = get_num(`$raw);
-!     my `$unit = `$raw;
-!     `$unit =~ s/^\s*[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?\s*//;
-!     `$unit = lc(`$unit);
-!     `$unit =~ s/[\[\]\(\)\{\}\s]//g;
-!
-!     if (`$unit =~ /^g(?:\/s|s-1|s\^-1|persecond|\/sec|\/second)$/) {
-!         return `$value / 1000.0;
-!     }
-!     return `$value;
-! }
-
 # 1. 提取基础气动参数
-! `$massFlow = get_mass_flow_kg_s(evaluate("-massFlow()\@R1 Outlet"));
+! `$massFlow = get_num(evaluate("-massFlow()\@R1 Outlet")) * $massFlowToKgFactor;
 ! `$p_in    = get_num(evaluate("massFlowAve(Pressure)\@R1 Inlet"));
 ! `$p_out   = get_num(evaluate("massFlowAve(Pressure)\@R1 Outlet"));
 ! `$PR      = (`$p_in == 0) ? 0 : (`$p_out / `$p_in);
@@ -75,7 +68,7 @@ foreach ($file in $resFiles) {
 ! `$is_eff  = get_num(evaluate("massFlowAve(Isentropic Compression Efficiency)\@R1 Outlet"));
 
 # 写入 CSV
-! printf MYCSV ("%s, %.6f, %.4f, %.4f, %.4f, %.4f, %.4f, %.6f, %.6f\n", `$currentRes, `$massFlow * $BladeCount, `$PR, `$p_in, `$p_out, `$t_in, `$t_out, `$is_eff, $BladeCount);
+! printf MYCSV ("%s, %.6f, %.4f, %.4f, %.4f, %.4f, %.4f, %.6f, %.6f, %s\n", `$currentRes, `$massFlow * $BladeCount, `$PR, `$p_in, `$p_out, `$t_in, `$t_out, `$is_eff, $BladeCount, "$MassFlowUnit");
 ! close(MYCSV);
 > quit
 "@

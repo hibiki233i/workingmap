@@ -16,6 +16,7 @@ ROOT_DIR = Path(__file__).resolve().parent
 APP_VERSION = "Version 1.0"
 LOG_ENCODING = locale.getpreferredencoding(False) or "utf-8"
 SETTINGS_PATH = ROOT_DIR / ".cfx_gui_settings.json"
+FLOW_UNITS = ("kg/s", "g/s")
 
 
 class ScanRowEditor(ttk.Frame):
@@ -171,6 +172,8 @@ class CfxGui(ttk.Frame):
 
         self.process: subprocess.Popen[str] | None = None
         self.temp_csv_path: Path | None = None
+        self.stop_requested = False
+        self.close_after_stop = False
 
         self.working_dir_var = tk.StringVar(value=str(ROOT_DIR))
         self.def_file_var = tk.StringVar(value="")
@@ -180,6 +183,7 @@ class CfxGui(ttk.Frame):
         self.scan_csv_var = tk.StringVar(value=str(ROOT_DIR / "scan_points.csv"))
         self.cores_var = tk.StringVar(value="8")
         self.blade_count_var = tk.StringVar(value="1")
+        self.flow_unit_var = tk.StringVar(value="kg/s")
         self.row_count_var = tk.StringVar(value="0")
         self.status_var = tk.StringVar(value="就绪")
 
@@ -205,8 +209,10 @@ class CfxGui(ttk.Frame):
         ttk.Entry(path_frame, textvariable=self.cores_var, width=12).grid(row=6, column=1, sticky="w", pady=4)
         ttk.Label(path_frame, text="叶片数").grid(row=7, column=0, sticky="w", pady=4)
         ttk.Entry(path_frame, textvariable=self.blade_count_var, width=12).grid(row=7, column=1, sticky="w", pady=4)
+        ttk.Label(path_frame, text="流量单位").grid(row=8, column=0, sticky="w", pady=4)
+        ttk.Combobox(path_frame, textvariable=self.flow_unit_var, values=FLOW_UNITS, width=10, state="readonly").grid(row=8, column=1, sticky="w", pady=4)
         version_status = ttk.Frame(path_frame)
-        version_status.grid(row=7, column=2, sticky="e", padx=(8, 0))
+        version_status.grid(row=8, column=2, sticky="e", padx=(8, 0))
         ttk.Label(version_status, text=APP_VERSION, foreground="#444").pack(side=tk.LEFT, padx=(0, 12))
         ttk.Label(version_status, textvariable=self.status_var, foreground="#444").pack(side=tk.LEFT)
 
@@ -231,8 +237,11 @@ class CfxGui(ttk.Frame):
         action_frame = ttk.Frame(self)
         action_frame.grid(row=2, column=0, sticky="ew", pady=(12, 0))
         ttk.Button(action_frame, text="开始扫描", command=self._start_scan).pack(side=tk.LEFT)
+        self.stop_button = ttk.Button(action_frame, text="终止扫描", command=self._stop_scan)
+        self.stop_button.pack(side=tk.LEFT, padx=(8, 0))
         ttk.Button(action_frame, text="仅保存扫描 CSV", command=self._export_scan_csv).pack(side=tk.LEFT, padx=(8, 0))
         ttk.Label(action_frame, text=f"界面版本：{APP_VERSION}").pack(side=tk.RIGHT)
+        self._set_process_controls(running=False)
 
         log_frame = ttk.LabelFrame(self, text="运行日志", padding=10)
         log_frame.grid(row=3, column=0, sticky="nsew", pady=(12, 0))
@@ -282,6 +291,7 @@ class CfxGui(ttk.Frame):
             self.scan_csv_var,
             self.cores_var,
             self.blade_count_var,
+            self.flow_unit_var,
         ]
         for variable in variables:
             variable.trace_add("write", lambda *_: self._save_settings())
@@ -303,6 +313,7 @@ class CfxGui(ttk.Frame):
             "scan_csv": self.scan_csv_var,
             "cores": self.cores_var,
             "blade_count": self.blade_count_var,
+            "flow_unit": self.flow_unit_var,
         }
         for key, variable in mapping.items():
             value = data.get(key)
@@ -323,6 +334,7 @@ class CfxGui(ttk.Frame):
             "scan_csv": self.scan_csv_var.get().strip(),
             "cores": self.cores_var.get().strip(),
             "blade_count": self.blade_count_var.get().strip(),
+            "flow_unit": self.flow_unit_var.get().strip(),
             "window_geometry": self.master.winfo_geometry(),
         }
         try:
@@ -331,8 +343,19 @@ class CfxGui(ttk.Frame):
             pass
 
     def _on_close(self) -> None:
+        if self.process is not None and self.process.poll() is None:
+            answer = messagebox.askyesno("终止扫描", "扫描仍在运行。关闭窗口前会终止 PowerShell 脚本及其子进程，是否继续？")
+            if not answer:
+                return
+            self._save_settings()
+            self.close_after_stop = True
+            self._terminate_process_tree()
+            return
         self._save_settings()
         self.master.destroy()
+
+    def _set_process_controls(self, running: bool) -> None:
+        self.stop_button.configure(state="normal" if running else "disabled")
 
     def _load_scan_csv(self, path: Path) -> None:
         if not path.exists():
@@ -417,6 +440,10 @@ class CfxGui(ttk.Frame):
         if blade_count <= 0:
             raise ValueError("叶片数必须大于 0。")
 
+        flow_unit = self.flow_unit_var.get().strip()
+        if flow_unit not in FLOW_UNITS:
+            raise ValueError("流量单位只能选择 kg/s 或 g/s。")
+
         rows = self._collect_validated_rows()
         return {
             "working_dir": str(working_dir),
@@ -427,6 +454,7 @@ class CfxGui(ttk.Frame):
             "scan_csv": str(scan_csv),
             "cores": str(cores),
             "blade_count": str(blade_count),
+            "flow_unit": flow_unit,
             "rows": rows,
         }
 
@@ -497,6 +525,8 @@ class CfxGui(ttk.Frame):
             str(payload["cores"]),
             "-BladeCount",
             str(payload["blade_count"]),
+            "-MassFlowUnit",
+            str(payload["flow_unit"]),
         ]
 
         self._log("启动命令:")
@@ -504,6 +534,8 @@ class CfxGui(ttk.Frame):
         self._log(f"日志解码编码: {LOG_ENCODING}")
 
         try:
+            self.stop_requested = False
+            self.close_after_stop = False
             self.process = subprocess.Popen(
                 command,
                 cwd=str(payload["working_dir"]),
@@ -521,7 +553,37 @@ class CfxGui(ttk.Frame):
 
         self.status_var.set("扫描已启动")
         self._log("扫描进程已启动。")
+        self._set_process_controls(running=True)
         threading.Thread(target=self._stream_process_output, daemon=True).start()
+
+    def _terminate_process_tree(self) -> None:
+        if self.process is None or self.process.poll() is not None:
+            return
+
+        self.stop_requested = True
+        self.status_var.set("正在终止扫描")
+        self._log(f"正在终止扫描进程，PID={self.process.pid}")
+
+        try:
+            if os.name == "nt":
+                subprocess.run(
+                    ["taskkill", "/PID", str(self.process.pid), "/T", "/F"],
+                    check=False,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+            else:
+                self.process.terminate()
+        except OSError as exc:
+            self._log(f"终止进程失败: {exc}")
+
+    def _stop_scan(self) -> None:
+        if self.process is None or self.process.poll() is not None:
+            messagebox.showinfo("没有运行中的任务", "当前没有正在运行的扫描任务。")
+            return
+        if not messagebox.askyesno("终止扫描", "确定要终止当前运行的 PowerShell 扫描脚本吗？"):
+            return
+        self._terminate_process_tree()
 
     def _stream_process_output(self) -> None:
         assert self.process is not None
@@ -531,6 +593,19 @@ class CfxGui(ttk.Frame):
         self.master.after(0, self._handle_process_exit, exit_code)
 
     def _handle_process_exit(self, exit_code: int) -> None:
+        self.process = None
+        self._set_process_controls(running=False)
+        if self.stop_requested:
+            self.status_var.set("扫描已终止")
+            self._log(f"扫描进程已终止，退出码: {exit_code}")
+            self.stop_requested = False
+            if self.close_after_stop:
+                self.close_after_stop = False
+                self.master.destroy()
+                return
+            messagebox.showinfo("已终止", "扫描脚本及其子进程已终止。")
+            return
+
         self.status_var.set(f"扫描结束，退出码 {exit_code}")
         self._log(f"扫描进程结束，退出码: {exit_code}")
         if exit_code == 0:

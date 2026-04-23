@@ -14,6 +14,7 @@ param(
     [string]$SpeedPressureTablePath = "scan_points.csv",
     [int]$Cores = 8,
     [double]$BladeCount = 1.0,
+    [string]$MassFlowUnit = "kg/s",
     [string]$WorkingDirectory
 )
 
@@ -72,6 +73,12 @@ if ($BladeCount -le 0) {
     throw "BladeCount 必须大于 0。"
 }
 
+$normalizedMassFlowUnit = $MassFlowUnit.Trim().ToLowerInvariant()
+if ($normalizedMassFlowUnit -notin @("kg/s", "g/s")) {
+    throw "MassFlowUnit 只能是 kg/s 或 g/s。"
+}
+$massFlowToKgFactor = if ($normalizedMassFlowUnit -eq "g/s") { 0.001 } else { 1.0 }
+
 # 自适应步长参数
 $initialDeltaP = 1.0
 $minDeltaP = 0.1
@@ -111,17 +118,17 @@ function Ensure-MasterCsv {
     param([string]$Path)
 
     if (-not (Test-Path $Path)) {
-        "Result_File,Mass_Flow_kg_s,Static_PR,P_in_Pa,P_out_Pa,T_in_K,T_out_K,Isentropic_Efficiency,Blade_Count" | Out-File -FilePath $Path -Encoding ASCII
+        "Result_File,Mass_Flow_kg_s,Static_PR,P_in_Pa,P_out_Pa,T_in_K,T_out_K,Isentropic_Efficiency,Blade_Count,Mass_Flow_Unit" | Out-File -FilePath $Path -Encoding ASCII
         return
     }
 
     $header = Get-Content -Path $Path -TotalCount 1 -ErrorAction SilentlyContinue
-    if ($header -and (($header -notmatch "Isentropic_Efficiency") -or ($header -notmatch "Blade_Count"))) {
+    if ($header -and (($header -notmatch "Isentropic_Efficiency") -or ($header -notmatch "Blade_Count") -or ($header -notmatch "Mass_Flow_Unit"))) {
         $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
         $backupPath = "$Path.legacy_upgrade_$timestamp.bak"
         Move-Item -Path $Path -Destination $backupPath
         Write-Host "  -> [CSV 升级] 旧版结果表缺少必要列，已备份为: $backupPath" -ForegroundColor Yellow
-        "Result_File,Mass_Flow_kg_s,Static_PR,P_in_Pa,P_out_Pa,T_in_K,T_out_K,Isentropic_Efficiency,Blade_Count" | Out-File -FilePath $Path -Encoding ASCII
+        "Result_File,Mass_Flow_kg_s,Static_PR,P_in_Pa,P_out_Pa,T_in_K,T_out_K,Isentropic_Efficiency,Blade_Count,Mass_Flow_Unit" | Out-File -FilePath $Path -Encoding ASCII
     }
 }
 
@@ -151,7 +158,7 @@ function Append-ResultRecord {
         return
     }
 
-    $line = "{0},{1},{2},{3},{4},{5},{6},{7},{8}" -f `
+    $line = "{0},{1},{2},{3},{4},{5},{6},{7},{8},{9}" -f `
         $Record.Result_File, `
         ([double]$Record.Mass_Flow_kg_s).ToString("0.000000", [System.Globalization.CultureInfo]::InvariantCulture), `
         ([double]$Record.Static_PR).ToString("0.0000", [System.Globalization.CultureInfo]::InvariantCulture), `
@@ -160,7 +167,8 @@ function Append-ResultRecord {
         ([double]$Record.T_in_K).ToString("0.0000", [System.Globalization.CultureInfo]::InvariantCulture), `
         ([double]$Record.T_out_K).ToString("0.0000", [System.Globalization.CultureInfo]::InvariantCulture), `
         ([double]$Record.Isentropic_Efficiency).ToString("0.000000", [System.Globalization.CultureInfo]::InvariantCulture), `
-        ([double]$Record.Blade_Count).ToString("0.######", [System.Globalization.CultureInfo]::InvariantCulture)
+        ([double]$Record.Blade_Count).ToString("0.######", [System.Globalization.CultureInfo]::InvariantCulture), `
+        $Record.Mass_Flow_Unit
 
     Add-Content -Path $Path -Value $line -Encoding ASCII
 }
@@ -500,8 +508,13 @@ function Invoke-PostProcessForPoint {
             $cached = $null
         } elseif (-not ($cached.PSObject.Properties.Name -contains "Blade_Count") -or [string]::IsNullOrWhiteSpace([string]$cached.Blade_Count)) {
             $cached = $null
+        } elseif (-not ($cached.PSObject.Properties.Name -contains "Mass_Flow_Unit") -or [string]::IsNullOrWhiteSpace([string]$cached.Mass_Flow_Unit)) {
+            $cached = $null
         } elseif ([math]::Abs(([double]$cached.Blade_Count) - $BladeCount) -gt 1e-9) {
             Write-Host "  -> [缓存失效] 同名结果的 Blade_Count 与当前设置不一致，重新后处理。" -ForegroundColor Yellow
+            $cached = $null
+        } elseif ([string]$cached.Mass_Flow_Unit -ne $MassFlowUnit) {
+            Write-Host "  -> [缓存失效] 同名结果的 Mass_Flow_Unit 与当前设置不一致，重新后处理。" -ForegroundColor Yellow
             $cached = $null
         }
     }
@@ -517,6 +530,7 @@ function Invoke-PostProcessForPoint {
             T_out_K = [double]$cached.T_out_K
             Isentropic_Efficiency = [double]$cached.Isentropic_Efficiency
             Blade_Count = [double]$cached.Blade_Count
+            Mass_Flow_Unit = [string]$cached.Mass_Flow_Unit
         }
     }
 
@@ -529,7 +543,7 @@ function Invoke-PostProcessForPoint {
     $cseContent = @"
 ! `$outFile = "$tempCsv";
 ! open(MYCSV, ">", `$outFile) or die "无法打开文件\n";
-! print MYCSV "Result_File,Mass_Flow_kg_s,Static_PR,P_in_Pa,P_out_Pa,T_in_K,T_out_K,Isentropic_Efficiency,Blade_Count\n";
+! print MYCSV "Result_File,Mass_Flow_kg_s,Static_PR,P_in_Pa,P_out_Pa,T_in_K,T_out_K,Isentropic_Efficiency,Blade_Count,Mass_Flow_Unit\n";
 ! `$resFileName = "$ResultFile";
 
 ! sub get_num {
@@ -540,21 +554,7 @@ function Invoke-PostProcessForPoint {
 !     return 0;
 ! }
 
-! sub get_mass_flow_kg_s {
-!     my `$raw = shift // "";
-!     my `$value = get_num(`$raw);
-!     my `$unit = `$raw;
-!     `$unit =~ s/^\s*[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?\s*//;
-!     `$unit = lc(`$unit);
-!     `$unit =~ s/[\[\]\(\)\{\}\s]//g;
-!
-!     if (`$unit =~ /^g(?:\/s|s-1|s\^-1|persecond|\/sec|\/second)$/) {
-!         return `$value / 1000.0;
-!     }
-!     return `$value;
-! }
-
-! `$massFlow = get_mass_flow_kg_s(evaluate("-massFlow()\@R1 Outlet"));
+! `$massFlow = get_num(evaluate("-massFlow()\@R1 Outlet")) * $massFlowToKgFactor;
 ! `$p_in    = get_num(evaluate("massFlowAve(Pressure)\@R1 Inlet"));
 ! `$p_out   = get_num(evaluate("massFlowAve(Pressure)\@R1 Outlet"));
 ! `$PR      = (`$p_in == 0) ? 0 : (`$p_out / `$p_in);
@@ -562,7 +562,7 @@ function Invoke-PostProcessForPoint {
 ! `$t_out   = get_num(evaluate("massFlowAve(Temperature)\@R1 Outlet"));
 ! `$is_eff  = get_num(evaluate("massFlowAve(Isentropic Compression Efficiency)\@R1 Outlet"));
 
-! printf MYCSV ("%s,%.6f,%.4f,%.4f,%.4f,%.4f,%.4f,%.6f,%.6f\n", `$resFileName, `$massFlow, `$PR, `$p_in, `$p_out, `$t_in, `$t_out, `$is_eff, 1.0);
+! printf MYCSV ("%s,%.6f,%.4f,%.4f,%.4f,%.4f,%.4f,%.6f,%.6f,%s\n", `$resFileName, `$massFlow, `$PR, `$p_in, `$p_out, `$t_in, `$t_out, `$is_eff, 1.0, "$MassFlowUnit");
 ! close(MYCSV);
 > quit
 "@
@@ -593,6 +593,7 @@ function Invoke-PostProcessForPoint {
         T_out_K = [double]$record.T_out_K
         Isentropic_Efficiency = [double]$record.Isentropic_Efficiency
         Blade_Count = [double]$record.Blade_Count
+        Mass_Flow_Unit = [string]$record.Mass_Flow_Unit
     }
 }
 
@@ -679,6 +680,7 @@ function Convert-ToTotalFlowRecord {
         T_out_K = [double]$PointData.T_out_K
         Isentropic_Efficiency = [double]$PointData.Isentropic_Efficiency
         Blade_Count = $BladeCountValue
+        Mass_Flow_Unit = $PointData.Mass_Flow_Unit
     }
 
     return $converted
@@ -694,6 +696,7 @@ Write-Host "初始场文件: $(if ($initialResFile) { $initialResFile } else { '
 Write-Host "结果 CSV: $csvFile" -ForegroundColor DarkGray
 Write-Host "扫描配置: $speedPressureTablePath" -ForegroundColor DarkGray
 Write-Host "叶片数: $BladeCount" -ForegroundColor DarkGray
+Write-Host "流量单位: $MassFlowUnit" -ForegroundColor DarkGray
 Write-Host "扫描点数量: $($scanConfig.Count)" -ForegroundColor DarkGray
 
 # ----------------- 3. 主扫描流程 -----------------
