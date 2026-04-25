@@ -4,6 +4,7 @@ import locale
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 import tkinter as tk
@@ -174,6 +175,7 @@ class CfxGui(ttk.Frame):
         self.temp_csv_path: Path | None = None
         self.stop_requested = False
         self.close_after_stop = False
+        self.plot_running = False
 
         self.working_dir_var = tk.StringVar(value=str(ROOT_DIR))
         self.def_file_var = tk.StringVar(value="")
@@ -181,6 +183,9 @@ class CfxGui(ttk.Frame):
         self.initial_res_var = tk.StringVar(value="")
         self.output_csv_var = tk.StringVar(value=str(ROOT_DIR / "Compressor_Map_Data.csv"))
         self.scan_csv_var = tk.StringVar(value=str(ROOT_DIR / "scan_points.csv"))
+        self.efficiency_csv_var = tk.StringVar(value=str(ROOT_DIR / "Extracted_Compressor_Data.csv"))
+        self.plot_output_var = tk.StringVar(value=str(ROOT_DIR / "Compressor_Map_With_Efficiency.png"))
+        self.auto_plot_var = tk.BooleanVar(value=True)
         self.cores_var = tk.StringVar(value="8")
         self.blade_count_var = tk.StringVar(value="1")
         self.flow_unit_var = tk.StringVar(value="kg/s")
@@ -204,15 +209,18 @@ class CfxGui(ttk.Frame):
         self._add_path_row(path_frame, 3, "初场 RES", self.initial_res_var, lambda: self._browse_file(self.initial_res_var, [("RES files", "*.res"), ("All files", "*.*")]))
         self._add_path_row(path_frame, 4, "输出 CSV", self.output_csv_var, self._browse_output_csv)
         self._add_path_row(path_frame, 5, "扫描 CSV", self.scan_csv_var, self._browse_scan_csv)
+        self._add_path_row(path_frame, 6, "效率 CSV", self.efficiency_csv_var, self._browse_efficiency_csv)
+        self._add_path_row(path_frame, 7, "图像输出", self.plot_output_var, self._browse_plot_output)
 
-        ttk.Label(path_frame, text="CPU 核数").grid(row=6, column=0, sticky="w", pady=4)
-        ttk.Entry(path_frame, textvariable=self.cores_var, width=12).grid(row=6, column=1, sticky="w", pady=4)
-        ttk.Label(path_frame, text="叶片数").grid(row=7, column=0, sticky="w", pady=4)
-        ttk.Entry(path_frame, textvariable=self.blade_count_var, width=12).grid(row=7, column=1, sticky="w", pady=4)
-        ttk.Label(path_frame, text="流量单位").grid(row=8, column=0, sticky="w", pady=4)
-        ttk.Combobox(path_frame, textvariable=self.flow_unit_var, values=FLOW_UNITS, width=10, state="readonly").grid(row=8, column=1, sticky="w", pady=4)
+        ttk.Label(path_frame, text="CPU 核数").grid(row=8, column=0, sticky="w", pady=4)
+        ttk.Entry(path_frame, textvariable=self.cores_var, width=12).grid(row=8, column=1, sticky="w", pady=4)
+        ttk.Label(path_frame, text="叶片数").grid(row=9, column=0, sticky="w", pady=4)
+        ttk.Entry(path_frame, textvariable=self.blade_count_var, width=12).grid(row=9, column=1, sticky="w", pady=4)
+        ttk.Label(path_frame, text="流量单位").grid(row=10, column=0, sticky="w", pady=4)
+        ttk.Combobox(path_frame, textvariable=self.flow_unit_var, values=FLOW_UNITS, width=10, state="readonly").grid(row=10, column=1, sticky="w", pady=4)
+        ttk.Checkbutton(path_frame, text="扫描完成后自动绘图", variable=self.auto_plot_var).grid(row=10, column=1, sticky="w", padx=(120, 0), pady=4)
         version_status = ttk.Frame(path_frame)
-        version_status.grid(row=8, column=2, sticky="e", padx=(8, 0))
+        version_status.grid(row=10, column=2, sticky="e", padx=(8, 0))
         ttk.Label(version_status, text=APP_VERSION, foreground="#444").pack(side=tk.LEFT, padx=(0, 12))
         ttk.Label(version_status, textvariable=self.status_var, foreground="#444").pack(side=tk.LEFT)
 
@@ -240,6 +248,8 @@ class CfxGui(ttk.Frame):
         self.stop_button = ttk.Button(action_frame, text="终止扫描", command=self._stop_scan)
         self.stop_button.pack(side=tk.LEFT, padx=(8, 0))
         ttk.Button(action_frame, text="仅保存扫描 CSV", command=self._export_scan_csv).pack(side=tk.LEFT, padx=(8, 0))
+        self.plot_button = ttk.Button(action_frame, text="绘制压气机图", command=self._start_plot)
+        self.plot_button.pack(side=tk.LEFT, padx=(8, 0))
         ttk.Label(action_frame, text=f"界面版本：{APP_VERSION}").pack(side=tk.RIGHT)
         self._set_process_controls(running=False)
 
@@ -281,6 +291,18 @@ class CfxGui(ttk.Frame):
             self.scan_csv_var.set(selected)
             self._load_scan_csv(Path(selected))
 
+    def _browse_efficiency_csv(self) -> None:
+        initial = Path(self.efficiency_csv_var.get()).parent if self.efficiency_csv_var.get() else ROOT_DIR
+        selected = filedialog.askopenfilename(initialdir=initial, filetypes=[("CSV files", "*.csv"), ("All files", "*.*")])
+        if selected:
+            self.efficiency_csv_var.set(selected)
+
+    def _browse_plot_output(self) -> None:
+        initial = Path(self.plot_output_var.get()).parent if self.plot_output_var.get() else ROOT_DIR
+        selected = filedialog.asksaveasfilename(initialdir=initial, defaultextension=".png", filetypes=[("PNG files", "*.png"), ("All files", "*.*")])
+        if selected:
+            self.plot_output_var.set(selected)
+
     def _bind_setting_traces(self) -> None:
         variables = [
             self.working_dir_var,
@@ -289,6 +311,9 @@ class CfxGui(ttk.Frame):
             self.initial_res_var,
             self.output_csv_var,
             self.scan_csv_var,
+            self.efficiency_csv_var,
+            self.plot_output_var,
+            self.auto_plot_var,
             self.cores_var,
             self.blade_count_var,
             self.flow_unit_var,
@@ -311,6 +336,8 @@ class CfxGui(ttk.Frame):
             "initial_res": self.initial_res_var,
             "output_csv": self.output_csv_var,
             "scan_csv": self.scan_csv_var,
+            "efficiency_csv": self.efficiency_csv_var,
+            "plot_output": self.plot_output_var,
             "cores": self.cores_var,
             "blade_count": self.blade_count_var,
             "flow_unit": self.flow_unit_var,
@@ -319,6 +346,10 @@ class CfxGui(ttk.Frame):
             value = data.get(key)
             if isinstance(value, str) and value.strip():
                 variable.set(value)
+
+        auto_plot = data.get("auto_plot")
+        if isinstance(auto_plot, bool):
+            self.auto_plot_var.set(auto_plot)
 
         geometry = data.get("window_geometry")
         if isinstance(geometry, str) and geometry.strip():
@@ -332,6 +363,9 @@ class CfxGui(ttk.Frame):
             "initial_res": self.initial_res_var.get().strip(),
             "output_csv": self.output_csv_var.get().strip(),
             "scan_csv": self.scan_csv_var.get().strip(),
+            "efficiency_csv": self.efficiency_csv_var.get().strip(),
+            "plot_output": self.plot_output_var.get().strip(),
+            "auto_plot": self.auto_plot_var.get(),
             "cores": self.cores_var.get().strip(),
             "blade_count": self.blade_count_var.get().strip(),
             "flow_unit": self.flow_unit_var.get().strip(),
@@ -356,6 +390,11 @@ class CfxGui(ttk.Frame):
 
     def _set_process_controls(self, running: bool) -> None:
         self.stop_button.configure(state="normal" if running else "disabled")
+        self.plot_button.configure(state="disabled" if self.plot_running else "normal")
+
+    def _set_plot_controls(self, running: bool) -> None:
+        self.plot_running = running
+        self.plot_button.configure(state="disabled" if running else "normal")
 
     def _load_scan_csv(self, path: Path) -> None:
         if not path.exists():
@@ -476,6 +515,120 @@ class CfxGui(ttk.Frame):
             return
         self.status_var.set("扫描 CSV 已保存")
         self._log(f"已导出扫描 CSV: {path}")
+
+    def _validate_plot_form(self) -> dict[str, str]:
+        working_dir = Path(self.working_dir_var.get()).expanduser()
+        input_csv = Path(self.output_csv_var.get()).expanduser()
+        efficiency_csv_text = self.efficiency_csv_var.get().strip()
+        efficiency_csv = Path(efficiency_csv_text).expanduser() if efficiency_csv_text else None
+        plot_output = Path(self.plot_output_var.get()).expanduser()
+
+        if not working_dir.is_dir():
+            raise ValueError(f"工作目录不存在: {working_dir}")
+        if not input_csv.is_file():
+            raise ValueError(f"绘图输入 CSV 不存在: {input_csv}")
+        if not plot_output.parent.exists():
+            raise ValueError(f"图像输出目录不存在: {plot_output.parent}")
+
+        try:
+            blade_count = float(self.blade_count_var.get().strip())
+        except ValueError as exc:
+            raise ValueError("叶片数必须是有效数字。") from exc
+        if blade_count <= 0:
+            raise ValueError("叶片数必须大于 0。")
+
+        return {
+            "working_dir": str(working_dir),
+            "input_csv": str(input_csv),
+            "efficiency_csv": str(efficiency_csv) if efficiency_csv is not None else "",
+            "plot_output": str(plot_output),
+            "blade_count": str(blade_count),
+        }
+
+    def _start_plot(self, auto: bool = False) -> bool:
+        if self.plot_running:
+            if not auto:
+                messagebox.showwarning("任务进行中", "绘图任务正在运行。")
+            return False
+
+        try:
+            payload = self._validate_plot_form()
+        except ValueError as exc:
+            self.status_var.set("绘图参数校验失败")
+            self._log(f"绘图参数错误: {exc}")
+            if not auto:
+                messagebox.showerror("参数错误", str(exc))
+            return False
+
+        script_path = ROOT_DIR / "plot_compressor_map.py"
+        command = [
+            sys.executable,
+            str(script_path),
+            "--input",
+            str(payload["input_csv"]),
+            "--output",
+            str(payload["plot_output"]),
+            "--blade-count",
+            str(payload["blade_count"]),
+        ]
+        if payload["efficiency_csv"]:
+            command.extend(["--efficiency-input", str(payload["efficiency_csv"])])
+
+        self._log("启动绘图命令:")
+        self._log(" ".join(command))
+        self.status_var.set("绘图已启动")
+        self._set_plot_controls(running=True)
+        threading.Thread(
+            target=self._run_plot_process,
+            args=(command, str(payload["working_dir"]), auto),
+            daemon=True,
+        ).start()
+        return True
+
+    def _run_plot_process(self, command: list[str], cwd: str, auto: bool) -> None:
+        try:
+            process = subprocess.Popen(
+                command,
+                cwd=cwd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                encoding=LOG_ENCODING,
+                errors="replace",
+            )
+        except OSError as exc:
+            self.master.after(0, self._handle_plot_start_error, exc, auto)
+            return
+
+        for line in process.stdout or []:
+            self.master.after(0, self._log, line.rstrip())
+        exit_code = process.wait()
+        self.master.after(0, self._handle_plot_exit, exit_code, auto)
+
+    def _handle_plot_start_error(self, exc: OSError, auto: bool) -> None:
+        self._set_plot_controls(running=False)
+        self.status_var.set("绘图启动失败")
+        self._log(f"绘图启动失败: {exc}")
+        if not auto:
+            messagebox.showerror("启动失败", f"无法启动绘图脚本: {exc}")
+
+    def _handle_plot_exit(self, exit_code: int, auto: bool) -> None:
+        self._set_plot_controls(running=False)
+        if exit_code == 0:
+            self.status_var.set("绘图完成")
+            self._log(f"绘图完成: {self.plot_output_var.get().strip()}")
+            if auto:
+                messagebox.showinfo("执行完成", "扫描脚本已完成，压气机图已生成。")
+            else:
+                messagebox.showinfo("绘图完成", "压气机图已生成。")
+            return
+
+        self.status_var.set(f"绘图失败，退出码 {exit_code}")
+        self._log(f"绘图脚本退出，退出码: {exit_code}")
+        if auto:
+            messagebox.showwarning("绘图失败", f"扫描已完成，但自动绘图失败，退出码: {exit_code}")
+        else:
+            messagebox.showwarning("绘图失败", f"绘图脚本已退出，退出码: {exit_code}")
 
     def _start_scan(self) -> None:
         if self.process is not None and self.process.poll() is None:
@@ -609,7 +762,10 @@ class CfxGui(ttk.Frame):
         self.status_var.set(f"扫描结束，退出码 {exit_code}")
         self._log(f"扫描进程结束，退出码: {exit_code}")
         if exit_code == 0:
-            messagebox.showinfo("执行完成", "扫描脚本已执行完成。")
+            if self.auto_plot_var.get() and self._start_plot(auto=True):
+                self._log("扫描成功，已自动启动绘图。")
+            else:
+                messagebox.showinfo("执行完成", "扫描脚本已执行完成。")
         else:
             messagebox.showwarning("执行结束", f"扫描脚本已退出，退出码: {exit_code}")
 

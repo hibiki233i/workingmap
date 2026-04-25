@@ -1,8 +1,13 @@
 import argparse
 import csv
+import os
 import re
+import tempfile
 from collections import defaultdict
 from pathlib import Path
+
+os.environ.setdefault("MPLCONFIGDIR", str(Path(tempfile.gettempdir()) / "matplotlib"))
+os.environ.setdefault("XDG_CACHE_HOME", str(Path(tempfile.gettempdir()) / "cache"))
 
 import matplotlib
 matplotlib.use("Agg")
@@ -312,7 +317,10 @@ def compare_fit_methods(x, y):
 
     comparison = []
     for name in candidate_names:
-        result = build_candidate_result(name, x, y)
+        try:
+            result = build_candidate_result(name, x, y)
+        except Exception:
+            continue
         loo_errors = []
         failed = False
         for index in range(len(x)):
@@ -341,14 +349,30 @@ def compare_fit_methods(x, y):
     return comparison
 
 
+def prepare_fit_xy(points):
+    by_flow = defaultdict(list)
+    for point in points:
+        by_flow[point["mass_flow_gs"]].append(point["pressure_ratio"])
+
+    x_values = []
+    y_values = []
+    for flow in sorted(by_flow):
+        x_values.append(flow)
+        y_values.append(float(np.mean(by_flow[flow])))
+
+    return np.array(x_values, dtype=float), np.array(y_values, dtype=float)
+
+
 def fit_surge_curve(grouped_points, fit_method):
     surge_points = extract_surge_points(grouped_points)
 
     if len(surge_points) < 3:
         return surge_points, None, []
 
-    x = np.array([point["mass_flow_gs"] for point in surge_points], dtype=float)
-    y = np.array([point["pressure_ratio"] for point in surge_points], dtype=float)
+    x, y = prepare_fit_xy(surge_points)
+    if len(x) < 3:
+        return surge_points, None, []
+
     comparison = compare_fit_methods(x, y)
     if not comparison:
         return surge_points, None, []
