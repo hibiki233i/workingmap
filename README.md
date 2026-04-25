@@ -42,6 +42,7 @@ py -3 cfx_gui.py
 - GUI 会记住上次填写的路径、核数、叶片数、流量单位、绘图路径、自动绘图选项以及窗口大小，保存在仓库目录下的 `.cfx_gui_settings.json`
 - GUI 提供“终止扫描”按钮；关闭窗口时若任务仍在运行，会先终止 PowerShell 脚本及其子进程
 - GUI 提供“绘制压气机图”按钮，可直接调用 `plot_compressor_map.py`；默认勾选“扫描完成后自动绘图”，扫描成功后会自动生成 PNG 图像
+- 绘图时会读取结果 CSV 中的 `Blade_Count`；新结果不会重复乘叶片数，旧结果缺少该列时会按 GUI 中的叶片数从单流道流量换算
 - 目标环境中可调用 PowerShell 和 ANSYS CFX 相关命令
 
 如果仍提示找不到 Python，优先检查 Windows 安装器是否勾选了 `Add python.exe to PATH`，然后重新打开终端或重新双击 `start_cfx_gui.bat`。

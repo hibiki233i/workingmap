@@ -41,7 +41,10 @@ def parse_args():
         "--blade-count",
         type=float,
         default=10.0,
-        help="Blade count used to convert single-passage mass flow into total flow.",
+        help=(
+            "Blade count for plotting. CSV rows with Blade_Count are rescaled from the recorded "
+            "blade count; legacy rows without Blade_Count are treated as single-passage flow."
+        ),
     )
     parser.add_argument(
         "--crop-gap-gs",
@@ -71,6 +74,15 @@ def get_float(row, key):
     return float(text)
 
 
+def scale_mass_flow_to_blade_count(row, mass_flow_kg, blade_count):
+    recorded_blade_count = get_float(row, "Blade_Count")
+    if recorded_blade_count is None:
+        recorded_blade_count = 1.0
+    if recorded_blade_count <= 0:
+        raise ValueError(f"Blade_Count must be greater than 0 in row: {row}")
+    return mass_flow_kg * blade_count / recorded_blade_count
+
+
 def load_rows(csv_path: Path, blade_count: float):
     rows = []
     with csv_path.open("r", encoding="utf-8", newline="") as handle:
@@ -94,12 +106,13 @@ def load_rows(csv_path: Path, blade_count: float):
             if mass_flow_kg is None or pr is None or mass_flow_kg <= 0 or pr <= 0:
                 continue
 
+            mass_flow_kg = scale_mass_flow_to_blade_count(row, mass_flow_kg, blade_count)
             rows.append(
                 {
                     "result_file": result_file,
                     "speed": int(match.group("speed")),
                     "target_pressure": float(match.group("pressure")),
-                    "mass_flow_gs": mass_flow_kg * 1000.0 * blade_count,
+                    "mass_flow_gs": mass_flow_kg * 1000.0,
                     "pressure_ratio": pr,
                     "efficiency_pct": (
                         efficiency * 100.0 if efficiency is not None and efficiency <= 1.0 else efficiency
