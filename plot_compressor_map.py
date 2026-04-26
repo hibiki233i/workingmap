@@ -319,13 +319,6 @@ def compare_fit_methods(x, y):
     candidate_names = [
         "poly_deg_1",
         "poly_deg_2",
-        "poly_deg_3",
-        "poly_deg_4",
-        "cubic_spline_natural",
-        "pchip",
-        "univariate_spline_s_0.0005",
-        "univariate_spline_s_0.001",
-        "univariate_spline_s_0.005",
     ]
 
     comparison = []
