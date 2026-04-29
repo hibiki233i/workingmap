@@ -39,6 +39,7 @@ py -3 cfx_gui.py
   - `%ProgramFiles(x86)%\Python\Python*`
 - 首次启动后，请在 GUI 中手动选择要使用的 `DEF` 与 `Base CCL` 文件
 - 如需从指定初场启动，可在 GUI 中选择可选的 `RES` 文件
+- 如果系统找不到 `cfx5solve` 或 `cfdpost`，可在 GUI 中填写 ANSYS CFX 的 `bin` 目录，程序会在本次扫描进程中临时加入 `PATH`
 - GUI 会记住上次填写的路径、核数、叶片数、流量单位、绘图路径、自动绘图选项以及窗口大小，保存在仓库目录下的 `.cfx_gui_settings.json`
 - GUI 提供“终止扫描”按钮；关闭窗口时若任务仍在运行，会先终止 PowerShell 脚本及其子进程
 - GUI 提供“绘制压气机图”按钮，可直接调用 `plot_compressor_map.py`；默认勾选“扫描完成后自动绘图”，扫描成功后会自动生成 PNG 图像

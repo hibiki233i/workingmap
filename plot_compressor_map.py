@@ -54,8 +54,8 @@ def parse_args():
     )
     parser.add_argument(
         "--fit-method",
-        default="auto",
-        help="Surge-fit method. Use 'auto' to compare candidates and choose the best one.",
+        default="poly_deg_2",
+        help="Surge-fit method (poly_deg_1, poly_deg_2, or auto).",
     )
     return parser.parse_args()
 
@@ -402,6 +402,56 @@ def fit_surge_curve(grouped_points, fit_method):
     return surge_points, result, comparison
 
 
+def enforce_surge_boundary(surge_result, all_points):
+    """Shift the surge polynomial so every data point lies to the right/below the surge line.
+
+    For a polynomial PR = f(flow), adds a vertical offset to the constant term so that
+    f(flow_i) >= PR_i for all data points.  Returns a copy of surge_result (or None if
+    the result is not a polynomial).
+    """
+    if surge_result is None or surge_result.get("kind") != "polynomial":
+        return surge_result
+
+    coeffs = surge_result["coefficients"]
+    predictor = surge_result["predictor"]
+
+    all_pr = np.array([p["pressure_ratio"] for p in all_points])
+    pr_range = float(np.max(all_pr) - np.min(all_pr))
+
+    max_violation = 0.0
+    for point in all_points:
+        flow = point["mass_flow_gs"]
+        surge_pr = float(predictor(flow))
+        violation = point["pressure_ratio"] - surge_pr
+        if violation > max_violation:
+            max_violation = violation
+
+    if max_violation <= 0.0:
+        return surge_result
+
+    margin = 0.02 * pr_range
+    offset = float(max_violation + margin)
+
+    new_coeffs = list(coeffs)
+    new_coeffs[-1] += offset
+
+    new_predictor = lambda xin, c=new_coeffs: float(np.polyval(c, xin))
+
+    result = dict(surge_result)
+    result["coefficients"] = new_coeffs
+    result["predictor"] = new_predictor
+    result["surge_boundary_offset"] = offset
+
+    flow_min = float(np.min([p["mass_flow_gs"] for p in all_points]))
+    flow_max = float(np.max([p["mass_flow_gs"] for p in all_points]))
+    x_fit = np.linspace(flow_min, flow_max, 300)
+    y_fit = np.array([new_predictor(x) for x in x_fit], dtype=float)
+    result["x_fit"] = x_fit
+    result["y_fit"] = y_fit
+
+    return result
+
+
 def format_polynomial(coefficients):
     degree = len(coefficients) - 1
     terms = []
@@ -571,6 +621,8 @@ def main():
 
     grouped_points = prepare_speed_lines(rows, crop_gap_gs=args.crop_gap_gs)
     surge_points, surge_result, comparison = fit_surge_curve(grouped_points, args.fit_method)
+    all_filtered = [p for pts in grouped_points.values() for p in pts]
+    surge_result = enforce_surge_boundary(surge_result, all_filtered)
     plot_map(grouped_points, Path(args.output), blade_count=args.blade_count, surge_result=surge_result)
 
     if comparison:
@@ -588,7 +640,9 @@ def main():
         print(f"  R^2: {surge_result['train_r2']:.6f}")
         if surge_result["kind"] == "polynomial":
             print(f"  Equation: y = {format_polynomial(surge_result['coefficients'])}")
-        else:
+        if surge_result.get("surge_boundary_offset"):
+            print(f"  Boundary offset applied: {surge_result['surge_boundary_offset']:.6f} (surge line now outside all points)")
+        if surge_result["kind"] != "polynomial":
             best_polynomial = next((item for item in comparison if item["kind"] == "polynomial"), None)
             print("  Equation: no single closed-form global polynomial; this is a spline-based fit.")
             if best_polynomial is not None:

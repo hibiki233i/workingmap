@@ -181,6 +181,7 @@ class CfxGui(ttk.Frame):
         self.def_file_var = tk.StringVar(value="")
         self.base_ccl_var = tk.StringVar(value="")
         self.initial_res_var = tk.StringVar(value="")
+        self.cfx_bin_dir_var = tk.StringVar(value="")
         self.output_csv_var = tk.StringVar(value=str(ROOT_DIR / "Compressor_Map_Data.csv"))
         self.scan_csv_var = tk.StringVar(value=str(ROOT_DIR / "scan_points.csv"))
         self.efficiency_csv_var = tk.StringVar(value=str(ROOT_DIR / "Extracted_Compressor_Data.csv"))
@@ -207,20 +208,21 @@ class CfxGui(ttk.Frame):
         self._add_path_row(path_frame, 1, "DEF 文件", self.def_file_var, lambda: self._browse_file(self.def_file_var, [("DEF files", "*.def"), ("All files", "*.*")]))
         self._add_path_row(path_frame, 2, "Base CCL", self.base_ccl_var, lambda: self._browse_file(self.base_ccl_var, [("CCL files", "*.ccl"), ("All files", "*.*")]))
         self._add_path_row(path_frame, 3, "初场 RES", self.initial_res_var, lambda: self._browse_file(self.initial_res_var, [("RES files", "*.res"), ("All files", "*.*")]))
-        self._add_path_row(path_frame, 4, "输出 CSV", self.output_csv_var, self._browse_output_csv)
-        self._add_path_row(path_frame, 5, "扫描 CSV", self.scan_csv_var, self._browse_scan_csv)
-        self._add_path_row(path_frame, 6, "效率 CSV", self.efficiency_csv_var, self._browse_efficiency_csv)
-        self._add_path_row(path_frame, 7, "图像输出", self.plot_output_var, self._browse_plot_output)
+        self._add_path_row(path_frame, 4, "CFX bin 目录", self.cfx_bin_dir_var, self._browse_cfx_bin_dir)
+        self._add_path_row(path_frame, 5, "输出 CSV", self.output_csv_var, self._browse_output_csv)
+        self._add_path_row(path_frame, 6, "扫描 CSV", self.scan_csv_var, self._browse_scan_csv)
+        self._add_path_row(path_frame, 7, "效率 CSV", self.efficiency_csv_var, self._browse_efficiency_csv)
+        self._add_path_row(path_frame, 8, "图像输出", self.plot_output_var, self._browse_plot_output)
 
-        ttk.Label(path_frame, text="CPU 核数").grid(row=8, column=0, sticky="w", pady=4)
-        ttk.Entry(path_frame, textvariable=self.cores_var, width=12).grid(row=8, column=1, sticky="w", pady=4)
-        ttk.Label(path_frame, text="叶片数").grid(row=9, column=0, sticky="w", pady=4)
-        ttk.Entry(path_frame, textvariable=self.blade_count_var, width=12).grid(row=9, column=1, sticky="w", pady=4)
-        ttk.Label(path_frame, text="流量单位").grid(row=10, column=0, sticky="w", pady=4)
-        ttk.Combobox(path_frame, textvariable=self.flow_unit_var, values=FLOW_UNITS, width=10, state="readonly").grid(row=10, column=1, sticky="w", pady=4)
-        ttk.Checkbutton(path_frame, text="扫描完成后自动绘图", variable=self.auto_plot_var).grid(row=10, column=1, sticky="w", padx=(120, 0), pady=4)
+        ttk.Label(path_frame, text="CPU 核数").grid(row=9, column=0, sticky="w", pady=4)
+        ttk.Entry(path_frame, textvariable=self.cores_var, width=12).grid(row=9, column=1, sticky="w", pady=4)
+        ttk.Label(path_frame, text="叶片数").grid(row=10, column=0, sticky="w", pady=4)
+        ttk.Entry(path_frame, textvariable=self.blade_count_var, width=12).grid(row=10, column=1, sticky="w", pady=4)
+        ttk.Label(path_frame, text="流量单位").grid(row=11, column=0, sticky="w", pady=4)
+        ttk.Combobox(path_frame, textvariable=self.flow_unit_var, values=FLOW_UNITS, width=10, state="readonly").grid(row=11, column=1, sticky="w", pady=4)
+        ttk.Checkbutton(path_frame, text="扫描完成后自动绘图", variable=self.auto_plot_var).grid(row=11, column=1, sticky="w", padx=(120, 0), pady=4)
         version_status = ttk.Frame(path_frame)
-        version_status.grid(row=10, column=2, sticky="e", padx=(8, 0))
+        version_status.grid(row=11, column=2, sticky="e", padx=(8, 0))
         ttk.Label(version_status, text=APP_VERSION, foreground="#444").pack(side=tk.LEFT, padx=(0, 12))
         ttk.Label(version_status, textvariable=self.status_var, foreground="#444").pack(side=tk.LEFT)
 
@@ -272,6 +274,11 @@ class CfxGui(ttk.Frame):
         if selected:
             self.working_dir_var.set(selected)
 
+    def _browse_cfx_bin_dir(self) -> None:
+        selected = filedialog.askdirectory(initialdir=self.cfx_bin_dir_var.get() or self.working_dir_var.get() or str(ROOT_DIR))
+        if selected:
+            self.cfx_bin_dir_var.set(selected)
+
     def _browse_file(self, variable: tk.StringVar, filetypes) -> None:
         initial = Path(variable.get()).parent if variable.get() else ROOT_DIR
         selected = filedialog.askopenfilename(initialdir=initial, filetypes=filetypes)
@@ -309,6 +316,7 @@ class CfxGui(ttk.Frame):
             self.def_file_var,
             self.base_ccl_var,
             self.initial_res_var,
+            self.cfx_bin_dir_var,
             self.output_csv_var,
             self.scan_csv_var,
             self.efficiency_csv_var,
@@ -334,6 +342,7 @@ class CfxGui(ttk.Frame):
             "def_file": self.def_file_var,
             "base_ccl": self.base_ccl_var,
             "initial_res": self.initial_res_var,
+            "cfx_bin_dir": self.cfx_bin_dir_var,
             "output_csv": self.output_csv_var,
             "scan_csv": self.scan_csv_var,
             "efficiency_csv": self.efficiency_csv_var,
@@ -361,6 +370,7 @@ class CfxGui(ttk.Frame):
             "def_file": self.def_file_var.get().strip(),
             "base_ccl": self.base_ccl_var.get().strip(),
             "initial_res": self.initial_res_var.get().strip(),
+            "cfx_bin_dir": self.cfx_bin_dir_var.get().strip(),
             "output_csv": self.output_csv_var.get().strip(),
             "scan_csv": self.scan_csv_var.get().strip(),
             "efficiency_csv": self.efficiency_csv_var.get().strip(),
@@ -445,6 +455,8 @@ class CfxGui(ttk.Frame):
         base_ccl = Path(self.base_ccl_var.get()).expanduser()
         initial_res_text = self.initial_res_var.get().strip()
         initial_res = Path(initial_res_text).expanduser() if initial_res_text else None
+        cfx_bin_dir_text = self.cfx_bin_dir_var.get().strip()
+        cfx_bin_dir = Path(cfx_bin_dir_text).expanduser() if cfx_bin_dir_text else None
         output_csv = Path(self.output_csv_var.get()).expanduser()
         scan_csv = Path(self.scan_csv_var.get()).expanduser()
 
@@ -460,6 +472,8 @@ class CfxGui(ttk.Frame):
             raise ValueError(f"Base CCL 不存在: {base_ccl}")
         if initial_res is not None and not initial_res.is_file():
             raise ValueError(f"初场 RES 文件不存在: {initial_res}")
+        if cfx_bin_dir is not None and not cfx_bin_dir.is_dir():
+            raise ValueError(f"CFX bin 目录不存在: {cfx_bin_dir}")
         if not output_csv.parent.exists():
             raise ValueError(f"输出 CSV 目录不存在: {output_csv.parent}")
         if scan_csv and not scan_csv.parent.exists():
@@ -489,6 +503,7 @@ class CfxGui(ttk.Frame):
             "def_file": str(def_file),
             "base_ccl": str(base_ccl),
             "initial_res": str(initial_res) if initial_res is not None else "",
+            "cfx_bin_dir": str(cfx_bin_dir) if cfx_bin_dir is not None else "",
             "output_csv": str(output_csv),
             "scan_csv": str(scan_csv),
             "cores": str(cores),
@@ -630,6 +645,13 @@ class CfxGui(ttk.Frame):
         else:
             messagebox.showwarning("绘图失败", f"绘图脚本已退出，退出码: {exit_code}")
 
+    def _build_scan_environment(self, cfx_bin_dir: str) -> dict[str, str]:
+        env = os.environ.copy()
+        if cfx_bin_dir:
+            current_path = env.get("PATH", "")
+            env["PATH"] = cfx_bin_dir + os.pathsep + current_path if current_path else cfx_bin_dir
+        return env
+
     def _start_scan(self) -> None:
         if self.process is not None and self.process.poll() is None:
             messagebox.showwarning("任务进行中", "已有扫描任务在运行。")
@@ -684,14 +706,18 @@ class CfxGui(ttk.Frame):
 
         self._log("启动命令:")
         self._log(" ".join(command))
+        if payload["cfx_bin_dir"]:
+            self._log(f"CFX bin 目录已加入本次扫描 PATH: {payload['cfx_bin_dir']}")
         self._log(f"日志解码编码: {LOG_ENCODING}")
 
         try:
             self.stop_requested = False
             self.close_after_stop = False
+            env = self._build_scan_environment(str(payload["cfx_bin_dir"]))
             self.process = subprocess.Popen(
                 command,
                 cwd=str(payload["working_dir"]),
+                env=env,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
