@@ -88,11 +88,13 @@ $stepShrinkFactor = 0.5
 $relativeDropWarn = 0.03      # 流量相对下降 3% 开始缩步
 $relativeDropStrong = 0.08    # 流量相对下降 8% 视为强烈接近喘振
 $relativeDropStopAtMinStep = 0.15   # 最小步长下若单步流量骤降 >=15%，直接视为越过喘振边界
-$absoluteDropWarn_kg = 0.000005   # 0.005 g/s
-$absoluteDropStrong_kg = 0.000020 # 0.020 g/s
+$absoluteDropWarn_kg = 0.000050   # 0.050 g/s，低于该量级视为后处理量化噪声
+$absoluteDropStrong_kg = 0.000120 # 0.120 g/s，避免小流量台阶触发强预警
 $absoluteDropStopAtMinStep_kg = 0.000300 # 最小步长下若单步绝对流量骤降 >=0.3 g/s，直接停止
 $curvatureWarn = 0.000004         # 二阶差分阈值 [kg/s/Pa^2]
 $curvatureStrong = 0.000010       # 强曲率阈值 [kg/s/Pa^2]
+$curvatureActivationRelDrop = 0.01      # 单步流量下降不足 1% 时不启用曲率判据
+$curvatureActivationAbsDrop_kg = 0.000050 # 单步流量下降不足 0.05 g/s 时不启用曲率判据
 $slopeAmplificationWarn = 1.5     # 末段斜率相对前段放大倍数
 $slopeAmplificationStrong = 2.5
 $zeroFlowThreshold_kg = 0.0001    # 0.1 g/s
@@ -614,6 +616,9 @@ function Get-NextDeltaP {
     $slope = if ($PressureStep -gt 0) { $absDrop / $PressureStep } else { 0.0 }
     $curvature = 0.0
     $slopeAmplification = 1.0
+    $effectiveAbsWarn = [math]::Max($absoluteDropWarn_kg, $PrevMassFlowKg * $relativeDropWarn)
+    $effectiveAbsStrong = [math]::Max($absoluteDropStrong_kg, $PrevMassFlowKg * $relativeDropStrong)
+    $curvatureEnabled = $relDrop -ge $curvatureActivationRelDrop -or $absDrop -ge $curvatureActivationAbsDrop_kg
 
     Write-Host ("  -> 流量下降: {0:F6} kg/s | 相对下降: {1:P2} | 下降斜率: {2:F6} kg/s/Pa" -f $absDrop, $relDrop, $slope)
 
@@ -635,20 +640,27 @@ function Get-NextDeltaP {
                 $curvature = [math]::Abs(($slope2 - $slope1) / $avgDp)
             }
 
-            if ([math]::Abs($slope1) -gt 1e-12) {
+            $prevAbsDrop = [math]::Max($m0 - $m1, 0.0)
+            $prevRelDrop = if ($m0 -gt 0) { $prevAbsDrop / $m0 } else { 0.0 }
+            $previousDropMeaningful = $prevRelDrop -ge $curvatureActivationRelDrop -or $prevAbsDrop -ge $curvatureActivationAbsDrop_kg
+            $curvatureEnabled = $curvatureEnabled -and $previousDropMeaningful
+
+            if ([math]::Abs($slope1) -gt 1e-12 -and $previousDropMeaningful) {
                 $slopeAmplification = [math]::Abs($slope2) / [math]::Abs($slope1)
-            } elseif ([math]::Abs($slope2) -gt 0) {
-                $slopeAmplification = [double]::PositiveInfinity
             }
 
-            Write-Host ("  -> 三点曲率: {0:F6} kg/s/Pa^2 | 斜率放大倍数: {1:F2}" -f $curvature, $slopeAmplification)
+            if ($curvatureEnabled) {
+                Write-Host ("  -> 三点曲率: {0:F6} kg/s/Pa^2 | 斜率放大倍数: {1:F2}" -f $curvature, $slopeAmplification)
+            } else {
+                Write-Host ("  -> 三点曲率: {0:F6} kg/s/Pa^2 | 微小流量台阶，忽略曲率缩步。" -f $curvature)
+            }
         }
     }
 
-    $strongByFirstOrder = $relDrop -ge $relativeDropStrong -or $absDrop -ge $absoluteDropStrong_kg
-    $warnByFirstOrder = $relDrop -ge $relativeDropWarn -or $absDrop -ge $absoluteDropWarn_kg
-    $strongByCurvature = $curvature -ge $curvatureStrong -or $slopeAmplification -ge $slopeAmplificationStrong
-    $warnByCurvature = $curvature -ge $curvatureWarn -or $slopeAmplification -ge $slopeAmplificationWarn
+    $strongByFirstOrder = $relDrop -ge $relativeDropStrong -or $absDrop -ge $effectiveAbsStrong
+    $warnByFirstOrder = $relDrop -ge $relativeDropWarn -or $absDrop -ge $effectiveAbsWarn
+    $strongByCurvature = $curvatureEnabled -and ($curvature -ge $curvatureStrong -or $slopeAmplification -ge $slopeAmplificationStrong)
+    $warnByCurvature = $curvatureEnabled -and ($curvature -ge $curvatureWarn -or $slopeAmplification -ge $slopeAmplificationWarn)
 
     if ($strongByFirstOrder -or $strongByCurvature) {
         $nextDeltaP = [math]::Max($CurrentDeltaP * $stepShrinkFactor, $minDeltaP)
