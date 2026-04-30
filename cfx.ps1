@@ -85,6 +85,7 @@ $minDeltaP = 0.1
 $maxDeltaP = $initialDeltaP
 $stepGrowFactor = 1.25
 $stepShrinkFactor = 0.5
+$boundaryStepShrinkFactor = 0.35
 $relativeDropWarn = 0.03      # 流量相对下降 3% 开始缩步
 $relativeDropStrong = 0.08    # 流量相对下降 8% 视为强烈接近喘振
 $relativeDropRefineBoundary = 0.20 # 单步流量骤降 >=20% 时认为已跨过边界，回退细分
@@ -243,27 +244,34 @@ function New-TempCcl {
 function Get-ExistingCasesForSpeed {
     param([int]$Speed)
 
-    $pattern = "^Map_Speed_${Speed}_Press_(?<pressure>[-+]?\d+(?:\.\d+)?)_(?<index>\d+)\.res$"
+    $pattern = "^Map_Speed_${Speed}_Press_(?<pressure>[-+]?\d+(?:\.\d+)?)_(?<index>\d+)\.(?<ext>res|out)$"
     $cases = @()
+    $seen = @{}
 
-    Get-ChildItem -Path "." -Filter "Map_Speed_${Speed}_Press_*.res" -ErrorAction SilentlyContinue |
+    Get-ChildItem -Path "." -Filter "Map_Speed_${Speed}_Press_*.*" -ErrorAction SilentlyContinue |
         Sort-Object Name |
         ForEach-Object {
             if ($_.Name -match $pattern) {
-                $pressure = [double]::Parse($matches.pressure, [System.Globalization.CultureInfo]::InvariantCulture)
                 $runStem = $_.BaseName
-                $outFile = Get-ChildItem -Path ".\${runStem}.out" -ErrorAction SilentlyContinue | Select-Object -First 1
+                if (-not $seen.ContainsKey($runStem)) {
+                    $seen[$runStem] = $true
 
-                $cases += [pscustomobject]@{
-                    Pressure = $pressure
-                    RunName = "Map_Speed_${Speed}_Press_$(Format-PressureValue -Pressure $pressure)"
-                    ResultFile = $_.Name
-                    OutFile = if ($null -ne $outFile) { $outFile.Name } else { $null }
+                    $pressure = [double]::Parse($matches.pressure, [System.Globalization.CultureInfo]::InvariantCulture)
+                    $resFile = Get-ChildItem -Path ".\${runStem}.res" -ErrorAction SilentlyContinue | Select-Object -First 1
+                    $outFile = Get-ChildItem -Path ".\${runStem}.out" -ErrorAction SilentlyContinue | Select-Object -First 1
+
+                    $cases += [pscustomobject]@{
+                        CaseKey = $runStem
+                        Pressure = $pressure
+                        RunName = "Map_Speed_${Speed}_Press_$(Format-PressureValue -Pressure $pressure)"
+                        ResultFile = if ($null -ne $resFile) { $resFile.Name } else { $null }
+                        OutFile = if ($null -ne $outFile) { $outFile.Name } else { $null }
+                    }
                 }
             }
         }
 
-    return @($cases | Sort-Object Pressure, ResultFile -Unique)
+    return @($cases | Sort-Object Pressure, CaseKey -Unique)
 }
 
 function Invoke-CfxSolveForPoint {
@@ -408,7 +416,10 @@ function Get-FileTailText {
 }
 
 function Test-WallBlockedBoundaryNotice {
-    param([string]$OutFile)
+    param(
+        [string]$OutFile,
+        [switch]$FullScan
+    )
 
     if (-not $OutFile -or -not (Test-Path $OutFile)) {
         return [pscustomobject]@{
@@ -419,12 +430,24 @@ function Test-WallBlockedBoundaryNotice {
         }
     }
 
-    $tailText = Get-FileTailText -Path $OutFile -TailBytes $outTailBytes
+    if ($FullScan) {
+        $stream = [System.IO.File]::Open($OutFile, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+        try {
+            $buffer = New-Object byte[] $stream.Length
+            [void]$stream.Read($buffer, 0, $buffer.Length)
+            $scanText = [System.Text.Encoding]::UTF8.GetString($buffer)
+        } finally {
+            $stream.Dispose()
+        }
+    } else {
+        $scanText = Get-FileTailText -Path $OutFile -TailBytes $outTailBytes
+    }
+
     $inletPattern = [regex]'A wall has been placed at portion\(s\) of an INLET[\s\S]{0,260}?100\.0% of the faces, 100\.0% of the area[\s\S]{0,260}?R1 Inlet'
     $outletPattern = [regex]'A wall has been placed at portion\(s\) of an OUTLET[\s\S]{0,260}?100\.0% of the faces, 100\.0% of the area[\s\S]{0,260}?R1 Outlet'
 
-    $inletCount = $inletPattern.Matches($tailText).Count
-    $outletCount = $outletPattern.Matches($tailText).Count
+    $inletCount = $inletPattern.Matches($scanText).Count
+    $outletCount = $outletPattern.Matches($scanText).Count
     $pairCount = [Math]::Min($inletCount, $outletCount)
 
     return [pscustomobject]@{
@@ -739,7 +762,7 @@ for ($i = 0; $i -lt $scanConfig.Count; $i++) {
         }
 
         $pressureTolerance = [Math]::Max($minDeltaP / 2.0, 0.001)
-        $unusedExistingCases = @($existingCases | Where-Object { -not $usedExistingResults.ContainsKey($_.ResultFile) })
+        $unusedExistingCases = @($existingCases | Where-Object { -not $usedExistingResults.ContainsKey($_.CaseKey) })
         $existingCandidate = $null
 
         if ($null -ne $lastStablePoint) {
@@ -748,7 +771,7 @@ for ($i = 0; $i -lt $scanConfig.Count; $i++) {
                     $_.Pressure -gt ([double]$lastStablePoint.Pressure + $pressureTolerance) -and
                     $_.Pressure -le ([double]$currentPressure + $pressureTolerance)
                 } |
-                Sort-Object Pressure |
+                Sort-Object Pressure -Descending |
                 Select-Object -First 1
         }
 
@@ -762,7 +785,11 @@ for ($i = 0; $i -lt $scanConfig.Count; $i++) {
         if ($null -ne $existingCandidate) {
             $targetPressure = [double]$existingCandidate.Pressure
             Write-Host "  -> 优先读取已有工况: $(Format-PressureValue -Pressure $targetPressure) Pa | 当前步长参考: $(Format-PressureValue -Pressure $deltaP) Pa" -ForegroundColor Yellow
-            Write-Host "  -> [复用历史] 使用已有结果文件: $($existingCandidate.ResultFile)" -ForegroundColor Cyan
+            if ($existingCandidate.ResultFile) {
+                Write-Host "  -> [复用历史] 使用已有结果文件: $($existingCandidate.ResultFile)" -ForegroundColor Cyan
+            } else {
+                Write-Host "  -> [复用历史] 仅发现历史日志文件: $($existingCandidate.OutFile)" -ForegroundColor Cyan
+            }
             $solveInfo = [pscustomobject]@{
                 RunName = $existingCandidate.RunName
                 ResultFile = $existingCandidate.ResultFile
@@ -772,13 +799,37 @@ for ($i = 0; $i -lt $scanConfig.Count; $i++) {
                 FromExisting = $true
                 Pressure = $targetPressure
             }
-            $usedExistingResults[$existingCandidate.ResultFile] = $true
+            $usedExistingResults[$existingCandidate.CaseKey] = $true
         } else {
             $targetPressure = [double]$currentPressure
             Write-Host "  -> 当前试探背压: $(Format-PressureValue -Pressure $targetPressure) Pa | 步长: $(Format-PressureValue -Pressure $deltaP) Pa" -ForegroundColor Yellow
             $solveInfo = Invoke-CfxSolveForPoint -Speed $speed -Pressure $targetPressure -InitResFile $currentInitRes
             $solveInfo | Add-Member -NotePropertyName FromExisting -NotePropertyValue $false -Force
             $solveInfo | Add-Member -NotePropertyName Pressure -NotePropertyValue $targetPressure -Force
+        }
+
+        $wallNoticeCheck = Test-WallBlockedBoundaryNotice -OutFile $solveInfo.OutFile -FullScan:([bool]$solveInfo.FromExisting)
+        if ($wallNoticeCheck.IsBlocked) {
+            Write-Host ("  -> [边界确认] .out 日志检测到持续锁墙：Inlet={0}, Outlet={1}, 配对={2}。判定已堵塞或越过喘振边界。" -f `
+                $wallNoticeCheck.InletCount, $wallNoticeCheck.OutletCount, $wallNoticeCheck.PairCount) -ForegroundColor Red
+
+            if ($null -eq $lastStablePoint) {
+                Write-Host "  -> [起始区异常] 该点虽生成结果，但尾部日志显示完全回流，继续抬高背压寻找首个稳定点。" -ForegroundColor Yellow
+                $currentPressure = [double]$solveInfo.Pressure + $firstPointSearchStep
+                continue
+            }
+
+            $refineCount++
+            if ($deltaP -le $minDeltaP -or $refineCount -ge $maxRefineAttempts) {
+                Write-Host "  -> [停止] 日志锁墙判据已持续触发，上一稳定点视为最后有效点。" -ForegroundColor Red
+                break
+            }
+
+            $actualPressureStep = [math]::Max(([double]$solveInfo.Pressure - [double]$lastStablePoint.Pressure), 0.0)
+            $deltaP = [math]::Max($actualPressureStep * $boundaryStepShrinkFactor, $minDeltaP)
+            $currentPressure = [double]$lastStablePoint.Pressure + $deltaP
+            Write-Host "  -> [回退细分] 不再后处理该点，直接缩步回退。" -ForegroundColor Magenta
+            continue
         }
 
         if ((-not $solveInfo.ResultFile) -or ($null -eq $solveInfo.ResultFile)) {
@@ -794,32 +845,10 @@ for ($i = 0; $i -lt $scanConfig.Count; $i++) {
                 break
             }
 
-            $deltaP = [math]::Max($deltaP * $stepShrinkFactor, $minDeltaP)
+            $actualPressureStep = [math]::Max(([double]$solveInfo.Pressure - [double]$lastStablePoint.Pressure), 0.0)
+            $deltaP = [math]::Max($actualPressureStep * $boundaryStepShrinkFactor, $minDeltaP)
             $currentPressure = [double]$lastStablePoint.Pressure + $deltaP
             Write-Host "  -> [回退细分] 本点发散，回到上一稳定点后缩步重试。" -ForegroundColor Magenta
-            continue
-        }
-
-        $wallNoticeCheck = Test-WallBlockedBoundaryNotice -OutFile $solveInfo.OutFile
-        if ($wallNoticeCheck.IsBlocked) {
-            Write-Host ("  -> [边界确认] .out 尾部检测到持续锁墙：Inlet={0}, Outlet={1}, 配对={2}。判定已堵塞或越过喘振边界。" -f `
-                $wallNoticeCheck.InletCount, $wallNoticeCheck.OutletCount, $wallNoticeCheck.PairCount) -ForegroundColor Red
-
-            if ($null -eq $lastStablePoint) {
-                Write-Host "  -> [起始区异常] 该点虽生成结果，但尾部日志显示完全回流，继续抬高背压寻找首个稳定点。" -ForegroundColor Yellow
-                $currentPressure = [double]$solveInfo.Pressure + $firstPointSearchStep
-                continue
-            }
-
-            $refineCount++
-            if ($deltaP -le $minDeltaP -or $refineCount -ge $maxRefineAttempts) {
-                Write-Host "  -> [停止] 日志锁墙判据已持续触发，上一稳定点视为最后有效点。" -ForegroundColor Red
-                break
-            }
-
-            $deltaP = [math]::Max($deltaP * $stepShrinkFactor, $minDeltaP)
-            $currentPressure = [double]$lastStablePoint.Pressure + $deltaP
-            Write-Host "  -> [回退细分] 不再后处理该点，直接缩步回退。" -ForegroundColor Magenta
             continue
         }
 
@@ -860,7 +889,7 @@ for ($i = 0; $i -lt $scanConfig.Count; $i++) {
                     break
                 }
 
-                $deltaP = [math]::Max($actualPressureStep * $stepShrinkFactor, $minDeltaP)
+                $deltaP = [math]::Max($actualPressureStep * $boundaryStepShrinkFactor, $minDeltaP)
                 $currentPressure = [double]$lastStablePoint.Pressure + $deltaP
                 Write-Host ("  -> [边界回退] 当前点流量骤降 {0:P2} ({1:F3} g/s)，不写入曲线；回到上一稳定点后细分，下一背压 {2} Pa，步长 {3} Pa。" -f `
                     $singleStepRelDrop,
