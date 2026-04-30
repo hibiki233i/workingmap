@@ -748,6 +748,7 @@ for ($i = 0; $i -lt $scanConfig.Count; $i++) {
     $stableHistory = @()
     $refineCount = 0
     $lineFinished = $false
+    $boundaryUpperPressure = $null
     $existingCases = Get-ExistingCasesForSpeed -Speed $speed
     $usedExistingResults = @{}
 
@@ -765,7 +766,17 @@ for ($i = 0; $i -lt $scanConfig.Count; $i++) {
         $unusedExistingCases = @($existingCases | Where-Object { -not $usedExistingResults.ContainsKey($_.CaseKey) })
         $existingCandidate = $null
 
-        if ($null -ne $lastStablePoint) {
+        if ($null -ne $lastStablePoint -and $null -ne $boundaryUpperPressure) {
+            $existingCandidate = $unusedExistingCases |
+                Where-Object {
+                    $_.Pressure -gt ([double]$lastStablePoint.Pressure + $pressureTolerance) -and
+                    $_.Pressure -lt ([double]$boundaryUpperPressure - $pressureTolerance)
+                } |
+                Sort-Object Pressure -Descending |
+                Select-Object -First 1
+        }
+
+        if ($null -ne $lastStablePoint -and $null -eq $existingCandidate) {
             $existingCandidate = $unusedExistingCases |
                 Where-Object {
                     $_.Pressure -gt ([double]$lastStablePoint.Pressure + $pressureTolerance) -and
@@ -801,6 +812,14 @@ for ($i = 0; $i -lt $scanConfig.Count; $i++) {
             }
             $usedExistingResults[$existingCandidate.CaseKey] = $true
         } else {
+            if ($null -ne $lastStablePoint -and $null -ne $boundaryUpperPressure -and $currentPressure -ge ([double]$boundaryUpperPressure - $pressureTolerance)) {
+                $boundedStep = [math]::Max((([double]$boundaryUpperPressure - [double]$lastStablePoint.Pressure) * $boundaryStepShrinkFactor), $minDeltaP)
+                $currentPressure = [double]$lastStablePoint.Pressure + $boundedStep
+                $deltaP = $boundedStep
+                Write-Host ("  -> [边界夹逼] 已知上界 {0} Pa，下一试探限制为 {1} Pa。" -f `
+                    (Format-PressureValue -Pressure ([double]$boundaryUpperPressure)),
+                    (Format-PressureValue -Pressure $currentPressure)) -ForegroundColor DarkMagenta
+            }
             $targetPressure = [double]$currentPressure
             Write-Host "  -> 当前试探背压: $(Format-PressureValue -Pressure $targetPressure) Pa | 步长: $(Format-PressureValue -Pressure $deltaP) Pa" -ForegroundColor Yellow
             $solveInfo = Invoke-CfxSolveForPoint -Speed $speed -Pressure $targetPressure -InitResFile $currentInitRes
@@ -820,6 +839,7 @@ for ($i = 0; $i -lt $scanConfig.Count; $i++) {
             }
 
             $refineCount++
+            $boundaryUpperPressure = [double]$solveInfo.Pressure
             if ($deltaP -le $minDeltaP -or $refineCount -ge $maxRefineAttempts) {
                 Write-Host "  -> [停止] 日志锁墙判据已持续触发，上一稳定点视为最后有效点。" -ForegroundColor Red
                 break
@@ -840,6 +860,7 @@ for ($i = 0; $i -lt $scanConfig.Count; $i++) {
             }
 
             $refineCount++
+            $boundaryUpperPressure = [double]$solveInfo.Pressure
             if ($deltaP -le $minDeltaP -or $refineCount -ge $maxRefineAttempts) {
                 Write-Host "  -> [边界确认] 继续细分已无明显收益，上一稳定点视为喘振前最后有效点。" -ForegroundColor Red
                 break
@@ -881,6 +902,7 @@ for ($i = 0; $i -lt $scanConfig.Count; $i++) {
             $actualPressureStep = [math]::Max(([double]$solveInfo.Pressure - [double]$lastStablePoint.Pressure), 0.0)
             if ($singleStepRelDrop -ge $relativeDropRefineBoundary -or $singleStepAbsDrop -ge $absoluteDropRefineBoundary_kg) {
                 $refineCount++
+                $boundaryUpperPressure = [double]$solveInfo.Pressure
                 if ($actualPressureStep -le $minDeltaP -or $refineCount -ge $maxRefineAttempts) {
                     Write-Host ("  -> [边界确认] 当前点相对上一稳定点流量骤降 {0:P2} ({1:F3} g/s)，已到细分极限；上一稳定点 {2} Pa 视为最后有效点。" -f `
                         $singleStepRelDrop,
