@@ -87,9 +87,11 @@ $stepGrowFactor = 1.25
 $stepShrinkFactor = 0.5
 $relativeDropWarn = 0.03      # 流量相对下降 3% 开始缩步
 $relativeDropStrong = 0.08    # 流量相对下降 8% 视为强烈接近喘振
+$relativeDropRefineBoundary = 0.20 # 单步流量骤降 >=20% 时认为已跨过边界，回退细分
 $relativeDropStopAtMinStep = 0.15   # 最小步长下若单步流量骤降 >=15%，直接视为越过喘振边界
 $absoluteDropWarn_kg = 0.000050   # 0.050 g/s，低于该量级视为后处理量化噪声
 $absoluteDropStrong_kg = 0.000120 # 0.120 g/s，避免小流量台阶触发强预警
+$absoluteDropRefineBoundary_kg = 0.000500 # 单步绝对下降 >=0.5 g/s 时回退细分
 $absoluteDropStopAtMinStep_kg = 0.000300 # 最小步长下若单步绝对流量骤降 >=0.3 g/s，直接停止
 $curvatureWarn = 0.000004         # 二阶差分阈值 [kg/s/Pa^2]
 $curvatureStrong = 0.000010       # 强曲率阈值 [kg/s/Pa^2]
@@ -845,6 +847,27 @@ for ($i = 0; $i -lt $scanConfig.Count; $i++) {
                 $singleStepAbsDrop / [double]$lastStablePoint.MassFlowKg
             } else {
                 0.0
+            }
+
+            $actualPressureStep = [math]::Max(([double]$solveInfo.Pressure - [double]$lastStablePoint.Pressure), 0.0)
+            if ($singleStepRelDrop -ge $relativeDropRefineBoundary -or $singleStepAbsDrop -ge $absoluteDropRefineBoundary_kg) {
+                $refineCount++
+                if ($actualPressureStep -le $minDeltaP -or $refineCount -ge $maxRefineAttempts) {
+                    Write-Host ("  -> [边界确认] 当前点相对上一稳定点流量骤降 {0:P2} ({1:F3} g/s)，已到细分极限；上一稳定点 {2} Pa 视为最后有效点。" -f `
+                        $singleStepRelDrop,
+                        ($singleStepAbsDrop * 1000.0),
+                        ([double]$lastStablePoint.Pressure)) -ForegroundColor Red
+                    break
+                }
+
+                $deltaP = [math]::Max($actualPressureStep * $stepShrinkFactor, $minDeltaP)
+                $currentPressure = [double]$lastStablePoint.Pressure + $deltaP
+                Write-Host ("  -> [边界回退] 当前点流量骤降 {0:P2} ({1:F3} g/s)，不写入曲线；回到上一稳定点后细分，下一背压 {2} Pa，步长 {3} Pa。" -f `
+                    $singleStepRelDrop,
+                    ($singleStepAbsDrop * 1000.0),
+                    (Format-PressureValue -Pressure $currentPressure),
+                    (Format-PressureValue -Pressure $deltaP)) -ForegroundColor Red
+                continue
             }
 
             if ($deltaP -le $minDeltaP -and (
