@@ -2,7 +2,7 @@
 setlocal
 
 cd /d "%~dp0"
-title CFX 扫描启动器 Version 1.0
+title CFX Scan Launcher - Version 2.0
 
 set "GUI_SCRIPT=%cd%\cfx_gui.py"
 
@@ -24,12 +24,12 @@ exit /b %errorlevel%
 set "PYTHON_CMD="
 
 if exist "%cd%\.venv\Scripts\python.exe" (
-  set "PYTHON_CMD=\"%cd%\.venv\Scripts\python.exe\""
+  set "PYTHON_CMD="%cd%\.venv\Scripts\python.exe""
   goto :eof
 )
 
 if exist "%cd%\venv\Scripts\python.exe" (
-  set "PYTHON_CMD=\"%cd%\venv\Scripts\python.exe\""
+  set "PYTHON_CMD="%cd%\venv\Scripts\python.exe""
   goto :eof
 )
 
@@ -53,21 +53,21 @@ if defined PYTHON_CMD goto :eof
 
 for /d %%D in ("%LocalAppData%\Programs\Python\Python*") do (
   if exist "%%~fD\python.exe" (
-    set "PYTHON_CMD=\"%%~fD\python.exe\""
+    set "PYTHON_CMD="%%~fD\python.exe""
     goto :eof
   )
 )
 
 for /d %%D in ("%ProgramFiles%\Python*") do (
   if exist "%%~fD\python.exe" (
-    set "PYTHON_CMD=\"%%~fD\python.exe\""
+    set "PYTHON_CMD="%%~fD\python.exe""
     goto :eof
   )
 )
 
 for /d %%D in ("%ProgramFiles(x86)%\Python*") do (
   if exist "%%~fD\python.exe" (
-    set "PYTHON_CMD=\"%%~fD\python.exe\""
+    set "PYTHON_CMD="%%~fD\python.exe""
     goto :eof
   )
 )
@@ -85,7 +85,7 @@ exit /b 0
 for /f "skip=2 tokens=2,*" %%A in ('reg query %1 /ve 2^>nul') do (
   if /i "%%A"=="REG_SZ" (
     if exist "%%B" (
-      set "PYTHON_CMD=\"%%B\""
+      set "PYTHON_CMD="%%B""
       goto :eof
     )
   )

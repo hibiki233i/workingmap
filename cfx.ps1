@@ -1,4 +1,4 @@
-# ==============================================================================
+﻿# ==============================================================================
 # ANSYS CFX 离心压缩机特性图全自动扫点脚本
 # 改进点：
 # 1. 使用“成功推进 + 失败回退”的自适应步长，而不是单一流量阈值砍半。
@@ -17,6 +17,8 @@ param(
     [string]$MassFlowUnit = "kg/s",
     [string]$WorkingDirectory
 )
+
+$ProgressPreference = "SilentlyContinue"
 
 $scriptRoot = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
 if ([string]::IsNullOrWhiteSpace($WorkingDirectory)) {
@@ -67,6 +69,11 @@ if ([string]::IsNullOrWhiteSpace($baseCclFile)) {
 
 if ($Cores -le 0) {
     throw "Cores 必须大于 0。"
+}
+
+$baseCclText = Get-Content -LiteralPath $baseCclFile -Raw
+if (($baseCclText -notmatch "MySpeed\s*=") -or ($baseCclText -notmatch "MyBackPressure\s*=")) {
+    Write-Host "警告: Base CCL 中未找到 MySpeed / MyBackPressure 表达式，各工况的转速与背压将无法被替换: $baseCclFile" -ForegroundColor Yellow
 }
 
 if ($BladeCount -le 0) {
@@ -122,6 +129,31 @@ function Format-PressureValue {
     return $text
 }
 
+function Get-RunArtifact {
+    param(
+        [string]$RunName,
+        [string]$Extension
+    )
+
+    # 只匹配 <RunName>_<序号>.<ext>，避免 Press_6 误匹配到 Press_6.5 / Press_65 的结果
+    $pattern = "^" + [regex]::Escape($RunName) + "_\d+\." + [regex]::Escape($Extension) + "$"
+    return Get-ChildItem -Path "." -Filter "${RunName}_*.$Extension" -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -match $pattern } |
+        Sort-Object LastWriteTime -Descending |
+        Select-Object -First 1
+}
+
+function ConvertTo-ProcessArgument {
+    param([string]$Value)
+
+    # Start-Process 会把参数数组直接用空格拼接，含空格的路径必须自行加引号
+    if ($Value -match '[\s"]') {
+        return '"' + (($Value -replace '(\\*)"', '$1$1\"') -replace '(\\+)$', '$1$1') + '"'
+    }
+
+    return $Value
+}
+
 function Get-TighterBoundaryUpper {
     param(
         [AllowNull()][object]$CurrentUpper,
@@ -166,28 +198,28 @@ function Get-BoundaryRefinement {
 function Ensure-MasterCsv {
     param([string]$Path)
 
-    if (-not (Test-Path $Path)) {
-        $resultCsvHeader | Out-File -FilePath $Path -Encoding ASCII
+    if (-not (Test-Path -LiteralPath $Path)) {
+        $resultCsvHeader | Out-File -LiteralPath $Path -Encoding ASCII
         return
     }
 
-    $header = Get-Content -Path $Path -TotalCount 1 -ErrorAction SilentlyContinue
+    $header = Get-Content -LiteralPath $Path -TotalCount 1 -ErrorAction SilentlyContinue
     if ($header -and (($header -notmatch "Isentropic_Efficiency") -or ($header -notmatch "Blade_Count") -or ($header -notmatch "Mass_Flow_Unit"))) {
         $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
         $backupPath = "$Path.legacy_upgrade_$timestamp.bak"
-        Move-Item -Path $Path -Destination $backupPath
+        Move-Item -LiteralPath $Path -Destination $backupPath
         Write-Host "  -> [CSV 升级] 旧版结果表缺少必要列，已备份为: $backupPath" -ForegroundColor Yellow
-        $resultCsvHeader | Out-File -FilePath $Path -Encoding ASCII
+        $resultCsvHeader | Out-File -LiteralPath $Path -Encoding ASCII
         return
     }
 
     if ($header -and (($header -notmatch "Result_LastWriteUtcTicks") -or ($header -notmatch "Result_Size_Bytes"))) {
-        $rows = @(Import-Csv -Path $Path)
+        $rows = @(Import-Csv -LiteralPath $Path)
         $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
         $backupPath = "$Path.cache_upgrade_$timestamp.bak"
-        Copy-Item -Path $Path -Destination $backupPath
+        Copy-Item -LiteralPath $Path -Destination $backupPath
 
-        $resultCsvHeader | Out-File -FilePath $Path -Encoding ASCII
+        $resultCsvHeader | Out-File -LiteralPath $Path -Encoding ASCII
         foreach ($row in $rows) {
             Write-ResultRecordLine -Path $Path -Record $row
         }
@@ -201,11 +233,11 @@ function Get-CsvRecordByResultFile {
         [string]$ResultFile
     )
 
-    if (-not (Test-Path $Path)) {
+    if (-not (Test-Path -LiteralPath $Path)) {
         return $null
     }
 
-    return Import-Csv -Path $Path | Where-Object { $_.Result_File -eq $ResultFile } | Select-Object -First 1
+    return Import-Csv -LiteralPath $Path | Where-Object { $_.Result_File -eq $ResultFile } | Select-Object -First 1
 }
 
 function Write-ResultRecordLine {
@@ -230,7 +262,7 @@ function Write-ResultRecordLine {
         $lastWriteTicks, `
         $sizeBytes
 
-    Add-Content -Path $Path -Value $line -Encoding ASCII
+    Add-Content -LiteralPath $Path -Value $line -Encoding ASCII
 }
 
 function Save-ResultRecord {
@@ -240,14 +272,14 @@ function Save-ResultRecord {
     )
 
     Ensure-MasterCsv -Path $Path
-    $otherRows = @(Import-Csv -Path $Path | Where-Object { $_.Result_File -ne $Record.Result_File })
+    $otherRows = @(Import-Csv -LiteralPath $Path | Where-Object { $_.Result_File -ne $Record.Result_File })
     $tempPath = "$Path.tmp"
-    $resultCsvHeader | Out-File -FilePath $tempPath -Encoding ASCII
+    $resultCsvHeader | Out-File -LiteralPath $tempPath -Encoding ASCII
     foreach ($row in $otherRows) {
         Write-ResultRecordLine -Path $tempPath -Record $row
     }
     Write-ResultRecordLine -Path $tempPath -Record $Record
-    Move-Item -Path $tempPath -Destination $Path -Force
+    Move-Item -LiteralPath $tempPath -Destination $Path -Force
 }
 
 function Import-ScanConfig {
@@ -257,7 +289,7 @@ function Import-ScanConfig {
         throw "扫描配置 CSV 不存在: $Path"
     }
 
-    $rows = @(Import-Csv -Path $Path)
+    $rows = @(Import-Csv -LiteralPath $Path)
     if ($rows.Count -eq 0) {
         throw "扫描配置 CSV 为空: $Path"
     }
@@ -305,7 +337,7 @@ function New-TempCcl {
         [string]$OutputPath
     )
 
-    $cclContent = Get-Content $baseCclFile
+    $cclContent = Get-Content -LiteralPath $baseCclFile
     $cclContent = $cclContent -replace "MySpeed\s*=\s*.*", "MySpeed = $Speed [rev min^-1]"
     $cclContent = $cclContent -replace "MyBackPressure\s*=\s*.*", "MyBackPressure = $Pressure [Pa]"
     $cclContent | Out-File -FilePath $OutputPath -Encoding ASCII
@@ -354,8 +386,8 @@ function Invoke-CfxSolveForPoint {
     $pressureTag = Format-PressureValue -Pressure $Pressure
     $runName = "Map_Speed_${Speed}_Press_${pressureTag}"
     $tempCclFile = "temp_${runName}.ccl"
-    $existingRes = Get-ChildItem -Path ".\${runName}*.res" -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-    $existingOut = Get-ChildItem -Path ".\${runName}*.out" -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    $existingRes = Get-RunArtifact -RunName $runName -Extension "res"
+    $existingOut = Get-RunArtifact -RunName $runName -Extension "out"
 
     Write-Host "`n[准备提交] 工况: $runName" -ForegroundColor Yellow
 
@@ -373,9 +405,9 @@ function Invoke-CfxSolveForPoint {
 
     New-TempCcl -Speed $Speed -Pressure $Pressure -OutputPath $tempCclFile
 
-    $argList = @("-def", $defFile, "-ccl", $tempCclFile)
+    $argList = @("-def", (ConvertTo-ProcessArgument $defFile), "-ccl", (ConvertTo-ProcessArgument $tempCclFile))
     if ($InitResFile -and (Test-Path $InitResFile)) {
-        $argList += @("-ini", $InitResFile)
+        $argList += @("-ini", (ConvertTo-ProcessArgument $InitResFile))
         Write-Host "  -> [计算中] 调取初始场: $InitResFile | 并行核数: $cores"
     } else {
         Write-Host "  -> [计算中] 无可用初始场，从零场启动 | 并行核数: $cores"
@@ -400,7 +432,7 @@ function Invoke-CfxSolveForPoint {
             continue
         }
 
-        $liveOutFileObj = Get-ChildItem -Path ".\${runName}*.out" -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+        $liveOutFileObj = Get-RunArtifact -RunName $runName -Extension "out"
         if ($null -eq $liveOutFileObj) {
             continue
         }
@@ -436,8 +468,8 @@ function Invoke-CfxSolveForPoint {
         $process.WaitForExit()
     }
 
-    $latestRes = Get-ChildItem -Path ".\${runName}*.res" -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-    $latestOut = Get-ChildItem -Path ".\${runName}*.out" -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    $latestRes = Get-RunArtifact -RunName $runName -Extension "res"
+    $latestOut = Get-RunArtifact -RunName $runName -Extension "out"
     if ($null -eq $latestRes) {
         return [pscustomobject]@{
             RunName = $runName
@@ -654,14 +686,14 @@ function Invoke-PostProcessForPoint {
     }
 
     $tempCsv = "__temp_extract.csv"
-    $cseFile = "Extract_Map_Data.cse"
+    $cseFile = "__Extract_Map_Data.cse"
     if (Test-Path $tempCsv) {
         Remove-Item $tempCsv
     }
 
     $cseContent = @"
 ! `$outFile = "$tempCsv";
-! open(MYCSV, ">", `$outFile) or die "无法打开文件\n";
+! open(MYCSV, ">", `$outFile) or die "cannot open `$outFile\n";
 ! print MYCSV "Result_File,Mass_Flow_kg_s,Static_PR,P_in_Pa,P_out_Pa,T_in_K,T_out_K,Isentropic_Efficiency,Blade_Count,Mass_Flow_Unit\n";
 ! `$resFileName = "$ResultFile";
 
@@ -690,6 +722,7 @@ function Invoke-PostProcessForPoint {
 
     $postCmd = "cfdpost -batch $cseFile -res `"$ResultFile`""
     Invoke-Expression $postCmd | Out-Null
+    Remove-Item -LiteralPath $cseFile -ErrorAction SilentlyContinue
 
     if (-not (Test-Path $tempCsv)) {
         return $null
@@ -969,7 +1002,7 @@ for ($i = 0; $i -lt $scanConfig.Count; $i++) {
         if ((-not $solveInfo.ResultFile) -or ($null -eq $solveInfo.ResultFile)) {
             if ($null -eq $lastStablePoint) {
                 Write-Host "  -> [起始点未收敛] 先抬高背压继续搜索稳定工作点。" -ForegroundColor Yellow
-                $currentPressure += $firstPointSearchStep
+                $currentPressure = [double]$solveInfo.Pressure + $firstPointSearchStep
                 continue
             }
 

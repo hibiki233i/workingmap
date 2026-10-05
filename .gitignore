@@ -16,6 +16,10 @@ __pycache__/
 temp_*.ccl
 __Batch_Extract_Map_Data.cse
 __temp_extract.csv
+__Extract_Map_Data.cse
+__data_only_extract.cse
+__data_only_extract.csv
+*.csv.tmp
 .cfx_gui_settings.json
 
 Compressor_Map_Data.csv

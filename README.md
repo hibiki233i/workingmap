@@ -4,11 +4,12 @@
 
 ## 主要文件
 
-- [cfx.ps1](/Users/hao/code/workingmap/cfx.ps1)：主扫描脚本，负责读取扫描配置并执行 CFX 求解与后处理。
-- [cfx_gui.py](/Users/hao/code/workingmap/cfx_gui.py)：中文图形界面，版本号为 `Version 1.0`。
-- [plot_compressor_map.py](/Users/hao/code/workingmap/plot_compressor_map.py)：压气机特性图绘制脚本，可由 GUI 自动或手动执行。
-- [start_cfx_gui.bat](/Users/hao/code/workingmap/start_cfx_gui.bat)：Windows 下一键启动 GUI。
-- [scan_points.csv](/Users/hao/code/workingmap/scan_points.csv)：默认扫描点配置文件。
+- [cfx.ps1](cfx.ps1)：主扫描脚本，负责读取扫描配置并执行 CFX 求解与后处理。
+- [cfx_gui.py](cfx_gui.py)：中文图形界面，版本号为 `Version 2.0`。
+- [plot_compressor_map.py](plot_compressor_map.py)：压气机特性图绘制脚本，可由 GUI 自动或手动执行。
+- [start_cfx_gui.bat](start_cfx_gui.bat)：Windows 下一键启动 GUI。
+- [scan_points.csv](scan_points.csv)：默认扫描点配置文件。
+- [data_only.ps1](data_only.ps1)：对当前目录下全部 `.res` 批量提取到 `Extracted_Compressor_Data.csv`（可作为绘图的效率 CSV）。增量执行：已提取且 `.res` 未变化的结果会跳过，重新提取时覆盖同名记录，不会产生重复行；加 `-Force` 可强制全部重新提取。
 
 说明：
 - 仓库当前不再内置 `base.def` 和 `base.ccl` 模板文件。
@@ -47,6 +48,17 @@ py -3 cfx_gui.py
 - 结果 CSV 会保存 `.res` 的修改时间与文件大小作为缓存指纹；同名 `.res` 被重新求解或覆盖后，主脚本会自动重新后处理并更新原记录
 - 一旦发现流量骤降、锁墙或发散点，该压力会成为失败上界；后续只在“最后稳定点—最低失败上界”之间二分细化，不再读取区间外的更高历史工况，也不会放宽已经确认的失败上界
 - 目标环境中可调用 PowerShell 和 ANSYS CFX 相关命令
+
+## GUI 使用要点（Version 2.0）
+
+- 左侧为输入/输出文件与参数，每个路径后的圆点表示校验状态：绿色正常、黄色提醒、红色错误、灰色未填（可选项），悬停可查看完整路径与说明
+- 相对路径统一以“工作目录”为基准解析；从资源管理器“复制为路径”粘贴的带引号路径也能识别
+- 扫描点表格：双击或 Enter 编辑，Tab / Shift+Tab 在单元格间跳转（末行 Tab 自动新增一行），可直接从 Excel 粘贴两列数据，右键可排序、清空；“批量生成…”按起止转速与步长生成扫描点；无效行以红色标出
+- `Ctrl+S` 保存扫描 CSV，`F5` 开始扫描；开始前会弹出确认框，汇总扫描范围及潜在问题（如找不到 cfx5solve、Base CCL 缺少 MySpeed/MyBackPressure、初始背压超过脚本安全上限、转速重复）
+- 扫描中表格会逐行显示“扫描中 / 已完成”，工具栏显示当前转速线、已提取工况点数，状态栏显示已运行时间；运行日志按错误/警告/成功着色并带时间戳，可复制或保存
+- 终止扫描后，若检测到未随进程树退出的 `solver-mpi.exe` 等 CFX 进程，会询问是否一并结束
+- 绘图可选择喘振线拟合方式（二次 / 一次多项式 / 自动），完成后可直接打开图像；“打开”菜单可快速打开工作目录、结果 CSV、特性图等
+- 窗口大小、分栏位置与各项参数会自动保存
 
 如果仍提示找不到 Python，优先检查 Windows 安装器是否勾选了 `Add python.exe to PATH`，然后重新打开终端或重新双击 `start_cfx_gui.bat`。
 

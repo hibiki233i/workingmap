@@ -1,5 +1,6 @@
 import argparse
 import csv
+import math
 import os
 import re
 import tempfile
@@ -71,7 +72,11 @@ def get_float(row, key):
     text = str(value).strip()
     if not text:
         return None
-    return float(text)
+    try:
+        number = float(text)
+    except ValueError:
+        return None
+    return number if math.isfinite(number) else None
 
 
 def scale_mass_flow_to_blade_count(row, mass_flow_kg, blade_count):
@@ -85,7 +90,7 @@ def scale_mass_flow_to_blade_count(row, mass_flow_kg, blade_count):
 
 def load_rows(csv_path: Path, blade_count: float):
     rows = []
-    with csv_path.open("r", encoding="utf-8", newline="") as handle:
+    with csv_path.open("r", encoding="utf-8-sig", newline="") as handle:
         reader = csv.DictReader(handle)
         fieldnames = [str(name).strip() for name in (reader.fieldnames or [])]
         required = {"Result_File", "Mass_Flow_kg_s", "Static_PR"}
@@ -614,8 +619,8 @@ def main():
     if not rows:
         raise RuntimeError("No valid compressor-map rows found in the primary CSV.")
 
-    efficiency_path = Path(args.efficiency_input)
-    if efficiency_path.exists():
+    efficiency_path = Path(args.efficiency_input) if args.efficiency_input else None
+    if efficiency_path is not None and efficiency_path.is_file():
         efficiency_rows = load_rows(efficiency_path, blade_count=args.blade_count)
         rows = interpolate_efficiency(rows, efficiency_rows)
 

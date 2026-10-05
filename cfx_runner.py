@@ -84,11 +84,12 @@ END
         # 1. CFX-Pre：动态生成脚本并替换网格
         # ==========================================
         print(f"[{run_id}] 正在合成物理边界条件 (CFX-Pre)...")
+        template_cfx_posix = template_cfx.replace("\\", "/")
         pre_content = f"""
 COMMAND FILE:
   CFX Pre Version = 25.1
 END
->load filename={template_cfx.replace("\\", "/")}
+>load filename={template_cfx_posix}
 >update
 > gtmImport filename={gtm_file}, type=GTM, \
 units=m, nameStrategy= Assembly
@@ -103,7 +104,7 @@ write def file
             
         try:
             subprocess.run([cfx5pre_exe, "-batch", pre_script], 
-                           cwd=working_dir, check=True, capture_output=True, text=True) 
+                           cwd=working_dir, check=True, capture_output=True, text=True, encoding='utf-8', errors='ignore')
         except Exception as e:
             return False, None, f"CFX-Pre 失败，无法生成 .def 文件: {e}"
 

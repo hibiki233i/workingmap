@@ -1,4 +1,4 @@
-# ==============================================================================
+﻿# ==============================================================================
 # 从已有 .res 文件离线重建压气机特性图数据
 # 不调用 cfx5solve，只调用 cfdpost 做后处理提取
 # 输出字段:
@@ -48,7 +48,7 @@ foreach ($file in $resFiles) {
     $cseContent = @"
 ! `$outFile = "$CsvFile";
 ! `$currentRes = "$resFileName";
-! open(MYCSV, ">>", `$outFile) or die "无法打开文件\n";
+! open(MYCSV, ">>", `$outFile) or die "cannot open `$outFile\n";
 
 ! sub get_num {
 !     my `$val = shift;
