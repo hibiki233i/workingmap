@@ -81,13 +81,13 @@ $massFlowToKgFactor = if ($normalizedMassFlowUnit -eq "g/s") { 0.001 } else { 1.
 
 # 自适应步长参数
 $initialDeltaP = 1.0
-$minDeltaP = 0.1
+$minDeltaP = 0.5
 $maxDeltaP = $initialDeltaP
 $stepGrowFactor = 1.25
 $stepShrinkFactor = 0.5
-$boundaryStepShrinkFactor = 0.35
-$relativeDropWarn = 0.03      # 流量相对下降 3% 开始缩步
-$relativeDropStrong = 0.08    # 流量相对下降 8% 视为强烈接近喘振
+$boundaryStepShrinkFactor = 0.5   # 已知稳定/失败区间内采用二分夹逼
+$relativeDropWarn = 0.05      # 流量相对下降 3% 开始缩步
+$relativeDropStrong = 0.1   # 流量相对下降 8% 视为强烈接近喘振
 $relativeDropRefineBoundary = 0.20 # 单步流量骤降 >=20% 时认为已跨过边界，回退细分
 $relativeDropStopAtMinStep = 0.15   # 最小步长下若单步流量骤降 >=15%，直接视为越过喘振边界
 $absoluteDropWarn_kg = 0.000050   # 0.050 g/s，低于该量级视为后处理量化噪声
@@ -103,11 +103,12 @@ $slopeAmplificationStrong = 2.5
 $zeroFlowThreshold_kg = 0.0001    # 0.1 g/s
 $maxSafePressure = 16.0
 $firstPointSearchStep = $initialDeltaP
-$maxRefineAttempts = 12
+$maxRefineAttempts = 4
 $outTailBytes = 50000
 $wallNoticePairThreshold = 3      # 连续命中 3 次才判失稳
 $monitorPollSeconds = 30
 $monitorWarmupSeconds = 120
+$resultCsvHeader = "Result_File,Mass_Flow_kg_s,Static_PR,P_in_Pa,P_out_Pa,T_in_K,T_out_K,Isentropic_Efficiency,Blade_Count,Mass_Flow_Unit,Result_LastWriteUtcTicks,Result_Size_Bytes"
 
 # ----------------- 2. 公共函数 -----------------
 function Format-PressureValue {
@@ -121,11 +122,52 @@ function Format-PressureValue {
     return $text
 }
 
+function Get-TighterBoundaryUpper {
+    param(
+        [AllowNull()][object]$CurrentUpper,
+        [double]$FailedPressure
+    )
+
+    if ($null -eq $CurrentUpper) {
+        return $FailedPressure
+    }
+
+    return [math]::Min([double]$CurrentUpper, $FailedPressure)
+}
+
+function Get-BoundaryRefinement {
+    param(
+        [double]$StablePressure,
+        [double]$UpperPressure,
+        [double]$MinimumStep,
+        [double]$MaximumStep,
+        [double]$Tolerance = 0.001
+    )
+
+    $gap = $UpperPressure - $StablePressure
+    if ($gap -le ($MinimumStep + $Tolerance)) {
+        return $null
+    }
+
+    # 优先二分，但不让边界回退步长超过正常扫描最大步长。
+    $step = [math]::Min($gap * $boundaryStepShrinkFactor, $MaximumStep)
+    $step = [math]::Max($step, $MinimumStep)
+    if ($step -ge ($gap - $Tolerance)) {
+        return $null
+    }
+
+    return [pscustomobject]@{
+        Gap = $gap
+        Step = $step
+        Pressure = $StablePressure + $step
+    }
+}
+
 function Ensure-MasterCsv {
     param([string]$Path)
 
     if (-not (Test-Path $Path)) {
-        "Result_File,Mass_Flow_kg_s,Static_PR,P_in_Pa,P_out_Pa,T_in_K,T_out_K,Isentropic_Efficiency,Blade_Count,Mass_Flow_Unit" | Out-File -FilePath $Path -Encoding ASCII
+        $resultCsvHeader | Out-File -FilePath $Path -Encoding ASCII
         return
     }
 
@@ -135,7 +177,21 @@ function Ensure-MasterCsv {
         $backupPath = "$Path.legacy_upgrade_$timestamp.bak"
         Move-Item -Path $Path -Destination $backupPath
         Write-Host "  -> [CSV 升级] 旧版结果表缺少必要列，已备份为: $backupPath" -ForegroundColor Yellow
-        "Result_File,Mass_Flow_kg_s,Static_PR,P_in_Pa,P_out_Pa,T_in_K,T_out_K,Isentropic_Efficiency,Blade_Count,Mass_Flow_Unit" | Out-File -FilePath $Path -Encoding ASCII
+        $resultCsvHeader | Out-File -FilePath $Path -Encoding ASCII
+        return
+    }
+
+    if ($header -and (($header -notmatch "Result_LastWriteUtcTicks") -or ($header -notmatch "Result_Size_Bytes"))) {
+        $rows = @(Import-Csv -Path $Path)
+        $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
+        $backupPath = "$Path.cache_upgrade_$timestamp.bak"
+        Copy-Item -Path $Path -Destination $backupPath
+
+        $resultCsvHeader | Out-File -FilePath $Path -Encoding ASCII
+        foreach ($row in $rows) {
+            Write-ResultRecordLine -Path $Path -Record $row
+        }
+        Write-Host "  -> [CSV 升级] 已增加结果文件指纹列；旧缓存将在使用时重新后处理。备份: $backupPath" -ForegroundColor Yellow
     }
 }
 
@@ -152,20 +208,15 @@ function Get-CsvRecordByResultFile {
     return Import-Csv -Path $Path | Where-Object { $_.Result_File -eq $ResultFile } | Select-Object -First 1
 }
 
-function Append-ResultRecord {
+function Write-ResultRecordLine {
     param(
         [string]$Path,
         [pscustomobject]$Record
     )
 
-    Ensure-MasterCsv -Path $Path
-
-    $existing = Get-CsvRecordByResultFile -Path $Path -ResultFile $Record.Result_File
-    if ($null -ne $existing) {
-        return
-    }
-
-    $line = "{0},{1},{2},{3},{4},{5},{6},{7},{8},{9}" -f `
+    $lastWriteTicks = if ($Record.PSObject.Properties.Name -contains "Result_LastWriteUtcTicks") { [string]$Record.Result_LastWriteUtcTicks } else { "" }
+    $sizeBytes = if ($Record.PSObject.Properties.Name -contains "Result_Size_Bytes") { [string]$Record.Result_Size_Bytes } else { "" }
+    $line = "{0},{1},{2},{3},{4},{5},{6},{7},{8},{9},{10},{11}" -f `
         $Record.Result_File, `
         ([double]$Record.Mass_Flow_kg_s).ToString("0.000000", [System.Globalization.CultureInfo]::InvariantCulture), `
         ([double]$Record.Static_PR).ToString("0.0000", [System.Globalization.CultureInfo]::InvariantCulture), `
@@ -175,9 +226,28 @@ function Append-ResultRecord {
         ([double]$Record.T_out_K).ToString("0.0000", [System.Globalization.CultureInfo]::InvariantCulture), `
         ([double]$Record.Isentropic_Efficiency).ToString("0.000000", [System.Globalization.CultureInfo]::InvariantCulture), `
         ([double]$Record.Blade_Count).ToString("0.######", [System.Globalization.CultureInfo]::InvariantCulture), `
-        $Record.Mass_Flow_Unit
+        $Record.Mass_Flow_Unit, `
+        $lastWriteTicks, `
+        $sizeBytes
 
     Add-Content -Path $Path -Value $line -Encoding ASCII
+}
+
+function Save-ResultRecord {
+    param(
+        [string]$Path,
+        [pscustomobject]$Record
+    )
+
+    Ensure-MasterCsv -Path $Path
+    $otherRows = @(Import-Csv -Path $Path | Where-Object { $_.Result_File -ne $Record.Result_File })
+    $tempPath = "$Path.tmp"
+    $resultCsvHeader | Out-File -FilePath $tempPath -Encoding ASCII
+    foreach ($row in $otherRows) {
+        Write-ResultRecordLine -Path $tempPath -Record $row
+    }
+    Write-ResultRecordLine -Path $tempPath -Record $Record
+    Move-Item -Path $tempPath -Destination $Path -Force
 }
 
 function Import-ScanConfig {
@@ -531,6 +601,14 @@ function Stop-CfxProcessTree {
 function Invoke-PostProcessForPoint {
     param([string]$ResultFile)
 
+    $resultInfo = Get-Item -LiteralPath $ResultFile -ErrorAction SilentlyContinue
+    if ($null -eq $resultInfo) {
+        Write-Host "  -> [后处理错误] 找不到结果文件: $ResultFile" -ForegroundColor Red
+        return $null
+    }
+
+    $resultLastWriteUtcTicks = $resultInfo.LastWriteTimeUtc.Ticks
+    $resultSizeBytes = $resultInfo.Length
     $cached = Get-CsvRecordByResultFile -Path $csvFile -ResultFile $ResultFile
     if ($null -ne $cached) {
         if (-not ($cached.PSObject.Properties.Name -contains "Isentropic_Efficiency") -or [string]::IsNullOrWhiteSpace([string]$cached.Isentropic_Efficiency)) {
@@ -544,6 +622,16 @@ function Invoke-PostProcessForPoint {
             $cached = $null
         } elseif ([string]$cached.Mass_Flow_Unit -ne $MassFlowUnit) {
             Write-Host "  -> [缓存失效] 同名结果的 Mass_Flow_Unit 与当前设置不一致，重新后处理。" -ForegroundColor Yellow
+            $cached = $null
+        } elseif (-not ($cached.PSObject.Properties.Name -contains "Result_LastWriteUtcTicks") -or
+                  -not ($cached.PSObject.Properties.Name -contains "Result_Size_Bytes") -or
+                  [string]::IsNullOrWhiteSpace([string]$cached.Result_LastWriteUtcTicks) -or
+                  [string]::IsNullOrWhiteSpace([string]$cached.Result_Size_Bytes)) {
+            Write-Host "  -> [缓存失效] 旧记录缺少结果文件指纹，重新后处理。" -ForegroundColor Yellow
+            $cached = $null
+        } elseif ([int64]$cached.Result_LastWriteUtcTicks -ne $resultLastWriteUtcTicks -or
+                  [int64]$cached.Result_Size_Bytes -ne $resultSizeBytes) {
+            Write-Host "  -> [缓存失效] 同名 .res 已被更新，重新后处理。" -ForegroundColor Yellow
             $cached = $null
         }
     }
@@ -560,6 +648,8 @@ function Invoke-PostProcessForPoint {
             Isentropic_Efficiency = [double]$cached.Isentropic_Efficiency
             Blade_Count = [double]$cached.Blade_Count
             Mass_Flow_Unit = [string]$cached.Mass_Flow_Unit
+            Result_LastWriteUtcTicks = [int64]$cached.Result_LastWriteUtcTicks
+            Result_Size_Bytes = [int64]$cached.Result_Size_Bytes
         }
     }
 
@@ -623,6 +713,8 @@ function Invoke-PostProcessForPoint {
         Isentropic_Efficiency = [double]$record.Isentropic_Efficiency
         Blade_Count = [double]$record.Blade_Count
         Mass_Flow_Unit = [string]$record.Mass_Flow_Unit
+        Result_LastWriteUtcTicks = $resultLastWriteUtcTicks
+        Result_Size_Bytes = $resultSizeBytes
     }
 }
 
@@ -720,6 +812,8 @@ function Convert-ToTotalFlowRecord {
         Isentropic_Efficiency = [double]$PointData.Isentropic_Efficiency
         Blade_Count = $BladeCountValue
         Mass_Flow_Unit = $PointData.Mass_Flow_Unit
+        Result_LastWriteUtcTicks = $PointData.Result_LastWriteUtcTicks
+        Result_Size_Bytes = $PointData.Result_Size_Bytes
     }
 
     return $converted
@@ -762,7 +856,7 @@ for ($i = 0; $i -lt $scanConfig.Count; $i++) {
             break
         }
 
-        $pressureTolerance = [Math]::Max($minDeltaP / 2.0, 0.001)
+        $pressureTolerance = 0.001
         $unusedExistingCases = @($existingCases | Where-Object { -not $usedExistingResults.ContainsKey($_.CaseKey) })
         $existingCandidate = $null
 
@@ -772,11 +866,11 @@ for ($i = 0; $i -lt $scanConfig.Count; $i++) {
                     $_.Pressure -gt ([double]$lastStablePoint.Pressure + $pressureTolerance) -and
                     $_.Pressure -lt ([double]$boundaryUpperPressure - $pressureTolerance)
                 } |
-                Sort-Object Pressure -Descending |
+                Sort-Object @{ Expression = { [math]::Abs([double]$_.Pressure - [double]$currentPressure) } }, Pressure |
                 Select-Object -First 1
         }
 
-        if ($null -ne $lastStablePoint -and $null -eq $existingCandidate) {
+        if ($null -ne $lastStablePoint -and $null -eq $boundaryUpperPressure -and $null -eq $existingCandidate) {
             $existingCandidate = $unusedExistingCases |
                 Where-Object {
                     $_.Pressure -gt ([double]$lastStablePoint.Pressure + $pressureTolerance) -and
@@ -786,7 +880,7 @@ for ($i = 0; $i -lt $scanConfig.Count; $i++) {
                 Select-Object -First 1
         }
 
-        if ($null -eq $existingCandidate) {
+        if ($null -eq $boundaryUpperPressure -and $null -eq $existingCandidate) {
             $existingCandidate = $unusedExistingCases |
                 Where-Object { $_.Pressure -ge ([double]$currentPressure - $pressureTolerance) } |
                 Sort-Object Pressure |
@@ -812,11 +906,25 @@ for ($i = 0; $i -lt $scanConfig.Count; $i++) {
             }
             $usedExistingResults[$existingCandidate.CaseKey] = $true
         } else {
-            if ($null -ne $lastStablePoint -and $null -ne $boundaryUpperPressure -and $currentPressure -ge ([double]$boundaryUpperPressure - $pressureTolerance)) {
-                $boundedStep = [math]::Max((([double]$boundaryUpperPressure - [double]$lastStablePoint.Pressure) * $boundaryStepShrinkFactor), $minDeltaP)
-                $currentPressure = [double]$lastStablePoint.Pressure + $boundedStep
-                $deltaP = $boundedStep
-                Write-Host ("  -> [边界夹逼] 已知上界 {0} Pa，下一试探限制为 {1} Pa。" -f `
+            if ($null -ne $lastStablePoint -and $null -ne $boundaryUpperPressure) {
+                $refinement = Get-BoundaryRefinement `
+                    -StablePressure ([double]$lastStablePoint.Pressure) `
+                    -UpperPressure ([double]$boundaryUpperPressure) `
+                    -MinimumStep $minDeltaP `
+                    -MaximumStep $maxDeltaP `
+                    -Tolerance $pressureTolerance
+                if ($null -eq $refinement) {
+                    Write-Host ("  -> [边界确认] 稳定点 {0} Pa 与失败上界 {1} Pa 的区间已不大于最小步长 {2} Pa。" -f `
+                        (Format-PressureValue -Pressure ([double]$lastStablePoint.Pressure)),
+                        (Format-PressureValue -Pressure ([double]$boundaryUpperPressure)),
+                        (Format-PressureValue -Pressure $minDeltaP)) -ForegroundColor Red
+                    break
+                }
+
+                $currentPressure = [double]$refinement.Pressure
+                $deltaP = [double]$refinement.Step
+                Write-Host ("  -> [边界夹逼] 稳定点 {0} Pa / 失败上界 {1} Pa，下一试探 {2} Pa（区间内二分）。" -f `
+                    (Format-PressureValue -Pressure ([double]$lastStablePoint.Pressure)),
                     (Format-PressureValue -Pressure ([double]$boundaryUpperPressure)),
                     (Format-PressureValue -Pressure $currentPressure)) -ForegroundColor DarkMagenta
             }
@@ -839,16 +947,22 @@ for ($i = 0; $i -lt $scanConfig.Count; $i++) {
             }
 
             $refineCount++
-            $boundaryUpperPressure = [double]$solveInfo.Pressure
-            if ($deltaP -le $minDeltaP -or $refineCount -ge $maxRefineAttempts) {
+            $boundaryUpperPressure = Get-TighterBoundaryUpper -CurrentUpper $boundaryUpperPressure -FailedPressure ([double]$solveInfo.Pressure)
+            if ($refineCount -ge $maxRefineAttempts) {
                 Write-Host "  -> [停止] 日志锁墙判据已持续触发，上一稳定点视为最后有效点。" -ForegroundColor Red
                 break
             }
 
-            $actualPressureStep = [math]::Max(([double]$solveInfo.Pressure - [double]$lastStablePoint.Pressure), 0.0)
-            $deltaP = [math]::Max($actualPressureStep * $boundaryStepShrinkFactor, $minDeltaP)
-            $currentPressure = [double]$lastStablePoint.Pressure + $deltaP
-            Write-Host "  -> [回退细分] 不再后处理该点，直接缩步回退。" -ForegroundColor Magenta
+            $refinement = Get-BoundaryRefinement -StablePressure ([double]$lastStablePoint.Pressure) -UpperPressure ([double]$boundaryUpperPressure) -MinimumStep $minDeltaP -MaximumStep $maxDeltaP -Tolerance $pressureTolerance
+            if ($null -eq $refinement) {
+                Write-Host "  -> [边界确认] 锁墙上界与上一稳定点的距离已达到最小步长，停止细分。" -ForegroundColor Red
+                break
+            }
+            $deltaP = [double]$refinement.Step
+            $currentPressure = [double]$refinement.Pressure
+            Write-Host ("  -> [回退细分] 锁墙上界收紧为 {0} Pa；下一点在稳定/失败区间内取 {1} Pa。" -f `
+                (Format-PressureValue -Pressure ([double]$boundaryUpperPressure)),
+                (Format-PressureValue -Pressure $currentPressure)) -ForegroundColor Magenta
             continue
         }
 
@@ -860,16 +974,22 @@ for ($i = 0; $i -lt $scanConfig.Count; $i++) {
             }
 
             $refineCount++
-            $boundaryUpperPressure = [double]$solveInfo.Pressure
-            if ($deltaP -le $minDeltaP -or $refineCount -ge $maxRefineAttempts) {
+            $boundaryUpperPressure = Get-TighterBoundaryUpper -CurrentUpper $boundaryUpperPressure -FailedPressure ([double]$solveInfo.Pressure)
+            if ($refineCount -ge $maxRefineAttempts) {
                 Write-Host "  -> [边界确认] 继续细分已无明显收益，上一稳定点视为喘振前最后有效点。" -ForegroundColor Red
                 break
             }
 
-            $actualPressureStep = [math]::Max(([double]$solveInfo.Pressure - [double]$lastStablePoint.Pressure), 0.0)
-            $deltaP = [math]::Max($actualPressureStep * $boundaryStepShrinkFactor, $minDeltaP)
-            $currentPressure = [double]$lastStablePoint.Pressure + $deltaP
-            Write-Host "  -> [回退细分] 本点发散，回到上一稳定点后缩步重试。" -ForegroundColor Magenta
+            $refinement = Get-BoundaryRefinement -StablePressure ([double]$lastStablePoint.Pressure) -UpperPressure ([double]$boundaryUpperPressure) -MinimumStep $minDeltaP -MaximumStep $maxDeltaP -Tolerance $pressureTolerance
+            if ($null -eq $refinement) {
+                Write-Host "  -> [边界确认] 发散上界与上一稳定点的距离已达到最小步长，停止细分。" -ForegroundColor Red
+                break
+            }
+            $deltaP = [double]$refinement.Step
+            $currentPressure = [double]$refinement.Pressure
+            Write-Host ("  -> [回退细分] 发散上界收紧为 {0} Pa；下一点在稳定/失败区间内取 {1} Pa。" -f `
+                (Format-PressureValue -Pressure ([double]$boundaryUpperPressure)),
+                (Format-PressureValue -Pressure $currentPressure)) -ForegroundColor Magenta
             continue
         }
 
@@ -899,11 +1019,11 @@ for ($i = 0; $i -lt $scanConfig.Count; $i++) {
                 0.0
             }
 
-            $actualPressureStep = [math]::Max(([double]$solveInfo.Pressure - [double]$lastStablePoint.Pressure), 0.0)
             if ($singleStepRelDrop -ge $relativeDropRefineBoundary -or $singleStepAbsDrop -ge $absoluteDropRefineBoundary_kg) {
                 $refineCount++
-                $boundaryUpperPressure = [double]$solveInfo.Pressure
-                if ($actualPressureStep -le $minDeltaP -or $refineCount -ge $maxRefineAttempts) {
+                $boundaryUpperPressure = Get-TighterBoundaryUpper -CurrentUpper $boundaryUpperPressure -FailedPressure ([double]$solveInfo.Pressure)
+                $boundaryGap = [double]$boundaryUpperPressure - [double]$lastStablePoint.Pressure
+                if ($boundaryGap -le ($minDeltaP + $pressureTolerance) -or $refineCount -ge $maxRefineAttempts) {
                     Write-Host ("  -> [边界确认] 当前点相对上一稳定点流量骤降 {0:P2} ({1:F3} g/s)，已到细分极限；上一稳定点 {2} Pa 视为最后有效点。" -f `
                         $singleStepRelDrop,
                         ($singleStepAbsDrop * 1000.0),
@@ -911,11 +1031,17 @@ for ($i = 0; $i -lt $scanConfig.Count; $i++) {
                     break
                 }
 
-                $deltaP = [math]::Max($actualPressureStep * $boundaryStepShrinkFactor, $minDeltaP)
-                $currentPressure = [double]$lastStablePoint.Pressure + $deltaP
-                Write-Host ("  -> [边界回退] 当前点流量骤降 {0:P2} ({1:F3} g/s)，不写入曲线；回到上一稳定点后细分，下一背压 {2} Pa，步长 {3} Pa。" -f `
+                $refinement = Get-BoundaryRefinement -StablePressure ([double]$lastStablePoint.Pressure) -UpperPressure ([double]$boundaryUpperPressure) -MinimumStep $minDeltaP -MaximumStep $maxDeltaP -Tolerance $pressureTolerance
+                if ($null -eq $refinement) {
+                    Write-Host "  -> [边界确认] 流量骤降上界与上一稳定点的距离已达到最小步长，停止细分。" -ForegroundColor Red
+                    break
+                }
+                $deltaP = [double]$refinement.Step
+                $currentPressure = [double]$refinement.Pressure
+                Write-Host ("  -> [边界回退] 当前点流量骤降 {0:P2} ({1:F3} g/s)，失败上界收紧为 {2} Pa；下一背压 {3} Pa，步长 {4} Pa。" -f `
                     $singleStepRelDrop,
                     ($singleStepAbsDrop * 1000.0),
+                    (Format-PressureValue -Pressure ([double]$boundaryUpperPressure)),
                     (Format-PressureValue -Pressure $currentPressure),
                     (Format-PressureValue -Pressure $deltaP)) -ForegroundColor Red
                 continue
@@ -942,18 +1068,26 @@ for ($i = 0; $i -lt $scanConfig.Count; $i++) {
             }
 
             $refineCount++
-            if ($deltaP -le $minDeltaP -or $refineCount -ge $maxRefineAttempts) {
+            $boundaryUpperPressure = Get-TighterBoundaryUpper -CurrentUpper $boundaryUpperPressure -FailedPressure ([double]$solveInfo.Pressure)
+            if (([double]$boundaryUpperPressure - [double]$lastStablePoint.Pressure) -le ($minDeltaP + $pressureTolerance) -or $refineCount -ge $maxRefineAttempts) {
                 Write-Host "  -> [边界确认] 已逼近喘振极限，停止本条转速线。" -ForegroundColor Red
                 break
             }
 
-            $deltaP = [math]::Max($deltaP * $stepShrinkFactor, $minDeltaP)
-            $currentPressure = [double]$lastStablePoint.Pressure + $deltaP
-            Write-Host "  -> [回退细分] 本点流量异常或接近憋死，不写入曲线，缩步重试。" -ForegroundColor Magenta
+            $refinement = Get-BoundaryRefinement -StablePressure ([double]$lastStablePoint.Pressure) -UpperPressure ([double]$boundaryUpperPressure) -MinimumStep $minDeltaP -MaximumStep $maxDeltaP -Tolerance $pressureTolerance
+            if ($null -eq $refinement) {
+                Write-Host "  -> [边界确认] 异常流量上界与上一稳定点的距离已达到最小步长，停止细分。" -ForegroundColor Red
+                break
+            }
+            $deltaP = [double]$refinement.Step
+            $currentPressure = [double]$refinement.Pressure
+            Write-Host ("  -> [回退细分] 本点流量异常或接近憋死；上界收紧为 {0} Pa，下一点取 {1} Pa。" -f `
+                (Format-PressureValue -Pressure ([double]$boundaryUpperPressure)),
+                (Format-PressureValue -Pressure $currentPressure)) -ForegroundColor Magenta
             continue
         }
 
-        Append-ResultRecord -Path $csvFile -Record $pointData
+        Save-ResultRecord -Path $csvFile -Record $pointData
 
         if ($null -eq $lastStablePoint) {
             Write-Host "  -> 记录首个稳定点，保持初始步长继续推进。" -ForegroundColor DarkGray
