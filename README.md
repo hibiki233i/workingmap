@@ -2,6 +2,26 @@
 
 本仓库用于执行 ANSYS CFX 压缩机特性曲线扫点，并提供一个可在 Windows 下启动的中文 GUI 界面来配置扫描参数。
 
+## 离线数值回归
+
+```sh
+python -m pip install -r requirements.txt
+python -m unittest discover -s tests -v
+```
+
+GitHub Actions 在 Ubuntu + Python 3.11 上运行相同测试，无需 CFX 或桌面显示。
+`tests/test_numerical_regressions.py` 使用 POLA-3 入库的 `examples/compressor_map.csv`，
+同时比对静压比和总压比路径的喘振线系数、边界偏移和效率插值。
+静压比二次拟合系数为 `[0.1388888888888889, 0.3805555555555556, 0.6780555555555556]`，
+总压比拟合只把常数项增加 0.12；边界修正增加 0.0235。
+系数和效率百分数使用 `atol=1e-10, rtol=0`，容许浮点舍入而能检出拟合或单位换算变化。
+另一组手写的密集点及断开点检查裁剪后完整点集和顺序，覆盖原示例没有触发的抽稀路径。
+所有输入均为合成数据。
+
+手工验证敏感性：临时把 `build_candidate_result()` 中的拟合阶数设为 `degree = 1`，
+执行 `python -m unittest discover -s tests -p test_numerical_regressions.py -v`，
+系数比对应失败并返回非零；恢复原来的阶数解析后重跑应通过。
+
 ## 主要文件
 
 - [cfx.ps1](cfx.ps1)：主扫描脚本，负责读取扫描配置并执行 CFX 求解与后处理。
