@@ -31,6 +31,7 @@ SETTINGS_PATH = ROOT_DIR / ".cfx_gui_settings.json"
 SCAN_SCRIPT = ROOT_DIR / "cfx.ps1"
 PLOT_SCRIPT = ROOT_DIR / "plot_compressor_map.py"
 FLOW_UNITS = ("kg/s", "g/s")
+PR_TYPES = {"static": "静压比", "total": "静止系总压比"}
 FIT_METHODS = {
     "poly_deg_2": "二次多项式",
     "poly_deg_1": "一次多项式",
@@ -313,6 +314,8 @@ def build_plot_command(config: dict) -> list[str]:
         format_number(config["blade_count"]),
         "--fit-method",
         config["fit_method"],
+        "--pr-type",
+        config.get("pr_type", "static"),
     ]
     if config.get("efficiency_csv"):
         command.extend(["--efficiency-input", str(config["efficiency_csv"])])
@@ -1567,9 +1570,11 @@ class CfxGui:
             "blade_count": tk.StringVar(value="1"),
             "flow_unit": tk.StringVar(value="kg/s"),
             "fit_method": tk.StringVar(value="poly_deg_2"),
+            "pr_type": tk.StringVar(value="static"),
         }
         self.auto_plot_var = tk.BooleanVar(value=True)
         self.fit_display_var = tk.StringVar(value=FIT_METHODS["poly_deg_2"])
+        self.pr_display_var = tk.StringVar(value=PR_TYPES["static"])
         self.status_var = tk.StringVar(value="就绪")
         self.elapsed_var = tk.StringVar(value="")
         self.progress_var = tk.StringVar(value="")
@@ -1735,13 +1740,19 @@ class CfxGui:
         fit = ttk.Combobox(body, values=list(FIT_METHODS.values()), textvariable=self.fit_display_var, state="readonly", width=16)
         fit.grid(row=1, column=4, sticky="w", pady=px(4))
         fit.bind("<<ComboboxSelected>>", self._on_fit_selected)
-        for widget in (unit, fit):
+        label("绘图压比", 2, 0)
+        pr_type = ttk.Combobox(body, values=list(PR_TYPES.values()), textvariable=self.pr_display_var,
+                               state="readonly", width=16)
+        pr_type.grid(row=2, column=1, columnspan=4, sticky="w", pady=px(4))
+        pr_type.bind("<<ComboboxSelected>>", self._on_pr_selected)
+        Tooltip(pr_type, "静压比使用 Static_PR；静止系总压比使用 Total_PR（需重新提取旧数据）。")
+        for widget in (unit, fit, pr_type):
             widget.bind("<<ComboboxSelected>>", lambda _e, w=widget: w.selection_clear(), add="+")
         ttk.Checkbutton(body, text="扫描成功后自动绘制特性图", variable=self.auto_plot_var, style="Card.TCheckbutton").grid(
-            row=2, column=0, columnspan=5, sticky="w", pady=(px(6), 0)
+            row=3, column=0, columnspan=5, sticky="w", pady=(px(6), 0)
         )
         # 滚轮滚动配置栏时不要误改数值/下拉选项
-        for widget in (cores, blades, unit, fit):
+        for widget in (cores, blades, unit, fit, pr_type):
             for sequence in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
                 widget.bind(sequence, lambda e: self._forward_wheel(e), add=False)
         return scroller
@@ -1839,6 +1850,9 @@ class CfxGui:
         if self.vars["fit_method"].get() not in FIT_METHODS:
             self.vars["fit_method"].set("poly_deg_2")
         self.fit_display_var.set(FIT_METHODS[self.vars["fit_method"].get()])
+        if self.vars["pr_type"].get() not in PR_TYPES:
+            self.vars["pr_type"].set("static")
+        self.pr_display_var.set(PR_TYPES[self.vars["pr_type"].get()])
         if isinstance(data.get("auto_plot"), bool):
             self.auto_plot_var.set(data["auto_plot"])
         geometry = data.get("window_geometry")
@@ -1912,6 +1926,13 @@ class CfxGui:
         for key, name in FIT_METHODS.items():
             if name == display:
                 self.vars["fit_method"].set(key)
+                return
+
+    def _on_pr_selected(self, _event=None) -> None:
+        display = self.pr_display_var.get()
+        for key, name in PR_TYPES.items():
+            if name == display:
+                self.vars["pr_type"].set(key)
                 return
 
     def _log(self, text: str, tag: str | None = None) -> None:
@@ -2111,6 +2132,7 @@ class CfxGui:
             "efficiency_csv": efficiency_csv,
             "blade_count": blade_count,
             "fit_method": self.vars["fit_method"].get() if self.vars["fit_method"].get() in FIT_METHODS else "poly_deg_2",
+            "pr_type": self.vars["pr_type"].get() if self.vars["pr_type"].get() in PR_TYPES else "static",
         }
         return config, errors, warnings
 

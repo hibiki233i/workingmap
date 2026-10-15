@@ -18,6 +18,8 @@ param(
     [string]$WorkingDirectory
 )
 
+. (Join-Path $PSScriptRoot "map_data.ps1")
+
 $ProgressPreference = "SilentlyContinue"
 
 $scriptRoot = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
@@ -115,7 +117,7 @@ $outTailBytes = 50000
 $wallNoticePairThreshold = 3      # 连续命中 3 次才判失稳
 $monitorPollSeconds = 30
 $monitorWarmupSeconds = 120
-$resultCsvHeader = "Result_File,Mass_Flow_kg_s,Static_PR,P_in_Pa,P_out_Pa,T_in_K,T_out_K,Isentropic_Efficiency,Blade_Count,Mass_Flow_Unit,Result_LastWriteUtcTicks,Result_Size_Bytes"
+$resultCsvHeader = $mapCsvHeader
 
 # ----------------- 2. 公共函数 -----------------
 function Format-PressureValue {
@@ -203,27 +205,14 @@ function Ensure-MasterCsv {
         return
     }
 
-    $header = Get-Content -LiteralPath $Path -TotalCount 1 -ErrorAction SilentlyContinue
-    if ($header -and (($header -notmatch "Isentropic_Efficiency") -or ($header -notmatch "Blade_Count") -or ($header -notmatch "Mass_Flow_Unit"))) {
-        $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
-        $backupPath = "$Path.legacy_upgrade_$timestamp.bak"
-        Move-Item -LiteralPath $Path -Destination $backupPath
-        Write-Host "  -> [CSV 升级] 旧版结果表缺少必要列，已备份为: $backupPath" -ForegroundColor Yellow
-        $resultCsvHeader | Out-File -LiteralPath $Path -Encoding ASCII
-        return
-    }
-
-    if ($header -and (($header -notmatch "Result_LastWriteUtcTicks") -or ($header -notmatch "Result_Size_Bytes"))) {
+    $header = Get-Content -LiteralPath $Path -TotalCount 1
+    if (([string]$header).Replace('"', '') -ne $resultCsvHeader) {
         $rows = @(Import-Csv -LiteralPath $Path)
-        $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
-        $backupPath = "$Path.cache_upgrade_$timestamp.bak"
+        $backupPath = "$Path.legacy_upgrade_$(Get-Date -Format 'yyyyMMdd_HHmmss').bak"
         Copy-Item -LiteralPath $Path -Destination $backupPath
-
-        $resultCsvHeader | Out-File -LiteralPath $Path -Encoding ASCII
-        foreach ($row in $rows) {
-            Write-ResultRecordLine -Path $Path -Record $row
-        }
-        Write-Host "  -> [CSV 升级] 已增加结果文件指纹列；旧缓存将在使用时重新后处理。备份: $backupPath" -ForegroundColor Yellow
+        $resultCsvHeader | Set-Content -LiteralPath $Path -Encoding UTF8
+        foreach ($row in $rows) { Write-ResultRecordLine -Path $Path -Record $row }
+        Write-Warning "CSV upgraded with explicit metadata and Total_PR; missing legacy values remain blank. Backup: $backupPath"
     }
 }
 
@@ -246,23 +235,7 @@ function Write-ResultRecordLine {
         [pscustomobject]$Record
     )
 
-    $lastWriteTicks = if ($Record.PSObject.Properties.Name -contains "Result_LastWriteUtcTicks") { [string]$Record.Result_LastWriteUtcTicks } else { "" }
-    $sizeBytes = if ($Record.PSObject.Properties.Name -contains "Result_Size_Bytes") { [string]$Record.Result_Size_Bytes } else { "" }
-    $line = "{0},{1},{2},{3},{4},{5},{6},{7},{8},{9},{10},{11}" -f `
-        $Record.Result_File, `
-        ([double]$Record.Mass_Flow_kg_s).ToString("0.000000", [System.Globalization.CultureInfo]::InvariantCulture), `
-        ([double]$Record.Static_PR).ToString("0.0000", [System.Globalization.CultureInfo]::InvariantCulture), `
-        ([double]$Record.P_in_Pa).ToString("0.0000", [System.Globalization.CultureInfo]::InvariantCulture), `
-        ([double]$Record.P_out_Pa).ToString("0.0000", [System.Globalization.CultureInfo]::InvariantCulture), `
-        ([double]$Record.T_in_K).ToString("0.0000", [System.Globalization.CultureInfo]::InvariantCulture), `
-        ([double]$Record.T_out_K).ToString("0.0000", [System.Globalization.CultureInfo]::InvariantCulture), `
-        ([double]$Record.Isentropic_Efficiency).ToString("0.000000", [System.Globalization.CultureInfo]::InvariantCulture), `
-        ([double]$Record.Blade_Count).ToString("0.######", [System.Globalization.CultureInfo]::InvariantCulture), `
-        $Record.Mass_Flow_Unit, `
-        $lastWriteTicks, `
-        $sizeBytes
-
-    Add-Content -LiteralPath $Path -Value $line -Encoding ASCII
+    Write-MapCsvRecord -Path $Path -Record $Record
 }
 
 function Save-ResultRecord {
@@ -642,8 +615,11 @@ function Invoke-PostProcessForPoint {
     $resultLastWriteUtcTicks = $resultInfo.LastWriteTimeUtc.Ticks
     $resultSizeBytes = $resultInfo.Length
     $cached = Get-CsvRecordByResultFile -Path $csvFile -ResultFile $ResultFile
+    $previousRecord = $cached
     if ($null -ne $cached) {
-        if (-not ($cached.PSObject.Properties.Name -contains "Isentropic_Efficiency") -or [string]::IsNullOrWhiteSpace([string]$cached.Isentropic_Efficiency)) {
+        if (-not (Test-MapTotalRatio ([string]$cached.Total_PR))) {
+            $cached = $null
+        } elseif (-not ($cached.PSObject.Properties.Name -contains "Isentropic_Efficiency") -or [string]::IsNullOrWhiteSpace([string]$cached.Isentropic_Efficiency)) {
             $cached = $null
         } elseif (-not ($cached.PSObject.Properties.Name -contains "Blade_Count") -or [string]::IsNullOrWhiteSpace([string]$cached.Blade_Count)) {
             $cached = $null
@@ -673,6 +649,10 @@ function Invoke-PostProcessForPoint {
             Result_File = $cached.Result_File
             Mass_Flow_kg_s = [double]$cached.Mass_Flow_kg_s
             Static_PR = [double]$cached.Static_PR
+            Total_PR = [double]$cached.Total_PR
+            schema_version = $cached.schema_version
+            Speed_RPM = $cached.Speed_RPM
+            Back_Pressure_Pa = $cached.Back_Pressure_Pa
             P_in_Pa = [double]$cached.P_in_Pa
             P_out_Pa = [double]$cached.P_out_Pa
             T_in_K = [double]$cached.T_in_K
@@ -694,7 +674,7 @@ function Invoke-PostProcessForPoint {
     $cseContent = @"
 ! `$outFile = "$tempCsv";
 ! open(MYCSV, ">", `$outFile) or die "cannot open `$outFile\n";
-! print MYCSV "Result_File,Mass_Flow_kg_s,Static_PR,P_in_Pa,P_out_Pa,T_in_K,T_out_K,Isentropic_Efficiency,Blade_Count,Mass_Flow_Unit\n";
+! print MYCSV "Result_File,Mass_Flow_kg_s,Static_PR,P_in_Pa,P_out_Pa,T_in_K,T_out_K,Isentropic_Efficiency,Blade_Count,Mass_Flow_Unit,Total_PR\n";
 ! `$resFileName = "$ResultFile";
 
 ! sub get_num {
@@ -709,11 +689,14 @@ function Invoke-PostProcessForPoint {
 ! `$p_in    = get_num(evaluate("massFlowAve(Pressure)\@R1 Inlet"));
 ! `$p_out   = get_num(evaluate("massFlowAve(Pressure)\@R1 Outlet"));
 ! `$PR      = (`$p_in == 0) ? 0 : (`$p_out / `$p_in);
+! `$P_total_in  = get_num(evaluate("massFlowAve(Total Pressure in Stn Frame)\@R1 Inlet"));
+! `$P_total_out = get_num(evaluate("massFlowAve(Total Pressure in Stn Frame)\@R1 Outlet"));
+! `$TotalPR = (`$P_total_in == 0) ? 0 : (`$P_total_out / `$P_total_in);
 ! `$t_in    = get_num(evaluate("massFlowAve(Temperature)\@R1 Inlet"));
 ! `$t_out   = get_num(evaluate("massFlowAve(Temperature)\@R1 Outlet"));
 ! `$is_eff  = get_num(evaluate("massFlowAve(Isentropic Compression Efficiency)\@R1 Outlet"));
 
-! printf MYCSV ("%s,%.6f,%.4f,%.4f,%.4f,%.4f,%.4f,%.6f,%.6f,%s\n", `$resFileName, `$massFlow, `$PR, `$p_in, `$p_out, `$t_in, `$t_out, `$is_eff, 1.0, "$MassFlowUnit");
+! printf MYCSV ("%s,%.6f,%.4f,%.4f,%.4f,%.4f,%.4f,%.6f,%.6f,%s,%.6f\n", `$resFileName, `$massFlow, `$PR, `$p_in, `$p_out, `$t_in, `$t_out, `$is_eff, 1.0, "$MassFlowUnit", `$TotalPR);
 ! close(MYCSV);
 > quit
 "@
@@ -735,10 +718,16 @@ function Invoke-PostProcessForPoint {
         return $null
     }
 
+    Copy-MapOperatingPoint $record $previousRecord
+    Add-MapMetadata $record
     return [pscustomobject]@{
         Result_File = $record.Result_File
         Mass_Flow_kg_s = [double]$record.Mass_Flow_kg_s
         Static_PR = [double]$record.Static_PR
+        Total_PR = [double]$record.Total_PR
+        schema_version = $record.schema_version
+        Speed_RPM = $record.Speed_RPM
+        Back_Pressure_Pa = $record.Back_Pressure_Pa
         P_in_Pa = [double]$record.P_in_Pa
         P_out_Pa = [double]$record.P_out_Pa
         T_in_K = [double]$record.T_in_K
@@ -838,6 +827,10 @@ function Convert-ToTotalFlowRecord {
         Result_File = $PointData.Result_File
         Mass_Flow_kg_s = [double]$PointData.Mass_Flow_kg_s * $BladeCountValue
         Static_PR = [double]$PointData.Static_PR
+        Total_PR = [double]$PointData.Total_PR
+        schema_version = $PointData.schema_version
+        Speed_RPM = $PointData.Speed_RPM
+        Back_Pressure_Pa = $PointData.Back_Pressure_Pa
         P_in_Pa = [double]$PointData.P_in_Pa
         P_out_Pa = [double]$PointData.P_out_Pa
         T_in_K = [double]$PointData.T_in_K

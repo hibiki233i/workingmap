@@ -1,0 +1,2 @@
+schema_version,Result_File,Speed_RPM,Back_Pressure_Pa,Mass_Flow_kg_s,Static_PR,Total_PR,P_in_Pa,P_out_Pa,T_in_K,T_out_K,Isentropic_Efficiency,Blade_Count,Mass_Flow_Unit
+1,synthetic_50000_2.res,50000,11,0.001324,1.35,1.47,10,13.5,4,4.5,0.79,10,kg/s

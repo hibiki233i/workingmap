@@ -4,6 +4,7 @@ import math
 import os
 import re
 import tempfile
+import warnings
 from collections import defaultdict
 from pathlib import Path
 
@@ -58,6 +59,9 @@ def parse_args():
         default="poly_deg_2",
         help="Surge-fit method (poly_deg_1, poly_deg_2, or auto).",
     )
+    parser.add_argument("--pr-type", choices=("static", "total"), default="static",
+                        help="Pressure ratio to plot (default: static, for legacy compatibility).")
+    parser.add_argument("--design-point", help="Optional one-row map CSV marking the design point.")
     return parser.parse_args()
 
 
@@ -88,50 +92,75 @@ def scale_mass_flow_to_blade_count(row, mass_flow_kg, blade_count):
     return mass_flow_kg * blade_count / recorded_blade_count
 
 
-def load_rows(csv_path: Path, blade_count: float):
+def load_rows(csv_path: Path, blade_count: float, pr_type="static"):
+    if not math.isfinite(blade_count) or blade_count <= 0:
+        raise ValueError("Plot blade count must be finite and greater than 0")
+    if pr_type not in ("static", "total"):
+        raise ValueError(f"Unsupported pressure ratio type: {pr_type}")
+    pr_column = "Total_PR" if pr_type == "total" else "Static_PR"
     rows = []
     with csv_path.open("r", encoding="utf-8-sig", newline="") as handle:
         reader = csv.DictReader(handle)
         fieldnames = [str(name).strip() for name in (reader.fieldnames or [])]
-        required = {"Result_File", "Mass_Flow_kg_s", "Static_PR"}
-        missing = required.difference(fieldnames)
+        missing = {"Mass_Flow_kg_s", pr_column}.difference(fieldnames)
         if missing:
             raise ValueError(f"CSV missing required columns: {sorted(missing)}")
 
-        for raw_row in reader:
+        for line_number, raw_row in enumerate(reader, start=2):
             row = sanitize_row(raw_row)
+            context = f"{csv_path}:{line_number}"
             result_file = str(row.get("Result_File", "")).strip()
-            match = RUN_NAME_PATTERN.search(result_file)
-            if not match:
+            version = str(row.get("schema_version", "")).strip()
+            if version not in ("", "1"):
+                raise ValueError(f"{context}: unsupported schema_version {version!r}")
+            metadata = {}
+            invalid = False
+            for key, group in (("Speed_RPM", "speed"), ("Back_Pressure_Pa", "pressure")):
+                value = get_float(row, key)
+                if not str(row.get(key, "")).strip():
+                    match = RUN_NAME_PATTERN.search(result_file)
+                    if match:
+                        value = float(match.group(group))
+                        warnings.warn(f"{context}: {key} missing; using legacy filename metadata")
+                if value is None or (key == "Speed_RPM" and value <= 0):
+                    warnings.warn(f"{context}: invalid or missing {key}; skipping row")
+                    invalid = True
+                metadata[key] = value
+            if invalid:
                 continue
 
             mass_flow_kg = get_float(row, "Mass_Flow_kg_s")
-            pr = get_float(row, "Static_PR")
+            pr = get_float(row, pr_column)
             efficiency = get_float(row, "Isentropic_Efficiency")
             if mass_flow_kg is None or pr is None or mass_flow_kg <= 0 or pr <= 0:
+                warnings.warn(f"{context}: invalid Mass_Flow_kg_s or {pr_column}; skipping row")
+                continue
+            recorded_count = get_float(row, "Blade_Count")
+            if not str(row.get("Blade_Count", "")).strip():
+                warnings.warn(f"{context}: Blade_Count missing; assuming single-passage flow")
+            elif recorded_count is None or recorded_count <= 0:
+                warnings.warn(f"{context}: invalid Blade_Count; skipping row")
                 continue
 
             mass_flow_kg = scale_mass_flow_to_blade_count(row, mass_flow_kg, blade_count)
-            rows.append(
-                {
-                    "result_file": result_file,
-                    "speed": int(match.group("speed")),
-                    "target_pressure": float(match.group("pressure")),
-                    "mass_flow_gs": mass_flow_kg * 1000.0,
-                    "pressure_ratio": pr,
-                    "efficiency_pct": (
-                        efficiency * 100.0 if efficiency is not None and efficiency <= 1.0 else efficiency
-                    ),
-                }
-            )
+            rows.append({
+                "result_file": result_file,
+                "speed": metadata["Speed_RPM"],
+                "target_pressure": metadata["Back_Pressure_Pa"],
+                "mass_flow_gs": mass_flow_kg * 1000.0,
+                "pressure_ratio": pr,
+                "efficiency_pct": (
+                    efficiency * 100.0 if efficiency is not None and efficiency <= 1.0 else efficiency
+                ),
+            })
     return rows
 
 
 def interpolate_efficiency(primary_rows, efficiency_rows):
     direct_lookup = {
-        row["result_file"]: row["efficiency_pct"]
+        (row["result_file"], row["speed"], row["target_pressure"]): row["efficiency_pct"]
         for row in efficiency_rows
-        if row.get("efficiency_pct") is not None
+        if row["result_file"] and row.get("efficiency_pct") is not None
     }
     by_speed = defaultdict(list)
     for row in efficiency_rows:
@@ -147,7 +176,7 @@ def interpolate_efficiency(primary_rows, efficiency_rows):
         if row.get("efficiency_pct") is not None:
             continue
 
-        direct = direct_lookup.get(row["result_file"])
+        direct = direct_lookup.get((row["result_file"], row["speed"], row["target_pressure"]))
         if direct is not None:
             row["efficiency_pct"] = direct
             continue
@@ -494,7 +523,8 @@ def build_annotation_text(surge_result):
     return "\n".join(lines)
 
 
-def plot_map(grouped_points, output_path: Path, blade_count: float, surge_result):
+def plot_map(grouped_points, output_path: Path, blade_count: float, surge_result,
+             pr_type="static", design_point=None):
     fig, ax = plt.subplots(figsize=(11.5, 7.2), constrained_layout=True)
 
     all_efficiencies = [
@@ -545,7 +575,7 @@ def plot_map(grouped_points, output_path: Path, blade_count: float, surge_result
             )
 
         ax.annotate(
-            f"{speed}",
+            f"{speed:g}",
             xy=(x[-1], y[-1]),
             xytext=(6, 0),
             textcoords="offset points",
@@ -600,13 +630,20 @@ def plot_map(grouped_points, output_path: Path, blade_count: float, surge_result
         cbar = fig.colorbar(scatter_reference, ax=ax, pad=0.02, shrink=0.98)
         cbar.set_label("Isentropic Efficiency (%)", fontsize=12, fontweight="bold")
 
+    if design_point is not None:
+        x, y = design_point["mass_flow_gs"], design_point["pressure_ratio"]
+        ax.scatter([x], [y], marker="*", s=220, color="#d62728", edgecolors="black", zorder=6)
+        ax.annotate("Design point", (x, y), xytext=(8, 10), textcoords="offset points")
+
     ax.set_title("Centrifugal Compressor Performance Map", fontsize=19, fontweight="bold", pad=10)
     ax.set_xlabel("Mass Flow(g/s)", fontsize=13)
-    ax.set_ylabel("Static Pressure Ratio", fontsize=13)
+    ax.set_ylabel("Total Pressure Ratio (stationary frame)" if pr_type == "total"
+                  else "Static Pressure Ratio", fontsize=13)
     ax.grid(True, linestyle="--", linewidth=0.8, alpha=0.3)
     ax.margins(x=0.03, y=0.05)
 
     fig.savefig(output_path, dpi=300)
+    plt.close(fig)
 
 
 def main():
@@ -615,20 +652,33 @@ def main():
     if not input_path.exists():
         raise FileNotFoundError(f"Input CSV not found: {input_path}")
 
-    rows = load_rows(input_path, blade_count=args.blade_count)
+    rows = load_rows(input_path, blade_count=args.blade_count, pr_type=args.pr_type)
     if not rows:
         raise RuntimeError("No valid compressor-map rows found in the primary CSV.")
 
     efficiency_path = Path(args.efficiency_input) if args.efficiency_input else None
     if efficiency_path is not None and efficiency_path.is_file():
-        efficiency_rows = load_rows(efficiency_path, blade_count=args.blade_count)
-        rows = interpolate_efficiency(rows, efficiency_rows)
+        try:
+            efficiency_rows = load_rows(efficiency_path, blade_count=args.blade_count, pr_type=args.pr_type)
+        except ValueError as exc:
+            # Optional input: an older table (e.g. without Total_PR) must not block the map.
+            warnings.warn(f"Ignoring efficiency CSV {efficiency_path}: {exc}")
+        else:
+            rows = interpolate_efficiency(rows, efficiency_rows)
+
+    design_point = None
+    if args.design_point:
+        design_rows = load_rows(Path(args.design_point), args.blade_count, args.pr_type)
+        if len(design_rows) != 1:
+            raise ValueError("Design-point CSV must contain exactly one valid row")
+        design_point = design_rows[0]
 
     grouped_points = prepare_speed_lines(rows, crop_gap_gs=args.crop_gap_gs)
     surge_points, surge_result, comparison = fit_surge_curve(grouped_points, args.fit_method)
     all_filtered = [p for pts in grouped_points.values() for p in pts]
     surge_result = enforce_surge_boundary(surge_result, all_filtered)
-    plot_map(grouped_points, Path(args.output), blade_count=args.blade_count, surge_result=surge_result)
+    plot_map(grouped_points, Path(args.output), blade_count=args.blade_count, surge_result=surge_result,
+             pr_type=args.pr_type, design_point=design_point)
 
     if comparison:
         print("Surge fit comparison")
