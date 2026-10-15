@@ -11,6 +11,8 @@ param(
     [switch]$Force
 )
 
+. (Join-Path $PSScriptRoot "map_data.ps1")
+
 $ProgressPreference = "SilentlyContinue"
 
 if ($BladeCount -le 0) {
@@ -26,7 +28,7 @@ $massFlowToKgFactor = if ($normalizedMassFlowUnit -eq "g/s") { 0.001 } else { 1.
 
 $cseFile = "__data_only_extract.cse"
 $tempCsv = "__data_only_extract.csv"
-$csvHeader = "Result_File,Mass_Flow_kg_s,Static_PR,P_in_Pa,P_out_Pa,T_in_K,T_out_K,Isentropic_Efficiency,Blade_Count,Mass_Flow_Unit,Result_LastWriteUtcTicks,Result_Size_Bytes"
+$csvHeader = $mapCsvHeader
 $invariant = [System.Globalization.CultureInfo]::InvariantCulture
 
 function Get-FieldText {
@@ -40,20 +42,6 @@ function Get-FieldText {
     }
 
     return ([string]$Record.$Name).Trim()
-}
-
-function Format-Number {
-    param(
-        [string]$Text,
-        [string]$Format
-    )
-
-    $number = 0.0
-    if ([double]::TryParse($Text, [System.Globalization.NumberStyles]::Float, $invariant, [ref]$number)) {
-        return $number.ToString($Format, $invariant)
-    }
-
-    return $Text
 }
 
 function Test-RecordCurrent {
@@ -71,6 +59,9 @@ function Test-RecordCurrent {
         return $false
     }
 
+    if ((Get-FieldText $Record "schema_version") -ne "1" -or
+        -not (Get-FieldText $Record "Total_PR")) { return $false }
+
     return ([math]::Abs($recordBladeCount - $BladeCount) -le 1e-9) -and
         ((Get-FieldText $Record "Mass_Flow_Unit") -eq $MassFlowUnit) -and
         ((Get-FieldText $Record "Result_LastWriteUtcTicks") -eq [string]$File.LastWriteTimeUtc.Ticks) -and
@@ -83,28 +74,11 @@ function Save-ExtractedCsv {
         [string]$Path
     )
 
-    $lines = New-Object System.Collections.Generic.List[string]
-    $lines.Add($csvHeader)
-    foreach ($record in $Records.Values) {
-        $fields = @(
-            (Get-FieldText $record "Result_File"),
-            (Format-Number (Get-FieldText $record "Mass_Flow_kg_s") "0.000000"),
-            (Format-Number (Get-FieldText $record "Static_PR") "0.0000"),
-            (Format-Number (Get-FieldText $record "P_in_Pa") "0.0000"),
-            (Format-Number (Get-FieldText $record "P_out_Pa") "0.0000"),
-            (Format-Number (Get-FieldText $record "T_in_K") "0.0000"),
-            (Format-Number (Get-FieldText $record "T_out_K") "0.0000"),
-            (Format-Number (Get-FieldText $record "Isentropic_Efficiency") "0.000000"),
-            (Format-Number (Get-FieldText $record "Blade_Count") "0.######"),
-            (Get-FieldText $record "Mass_Flow_Unit"),
-            (Get-FieldText $record "Result_LastWriteUtcTicks"),
-            (Get-FieldText $record "Result_Size_Bytes")
-        )
-        $lines.Add($fields -join ",")
-    }
-
     $tempPath = "$Path.tmp"
-    $lines | Set-Content -LiteralPath $tempPath -Encoding UTF8
+    $csvHeader | Set-Content -LiteralPath $tempPath -Encoding UTF8
+    foreach ($record in $Records.Values) {
+        Write-MapCsvRecord -Path $tempPath -Record $record
+    }
     Move-Item -LiteralPath $tempPath -Destination $Path -Force
 }
 
@@ -162,7 +136,7 @@ foreach ($file in $resFiles) {
 ! `$outFile = "$tempCsv";
 ! `$currentRes = "$resFileName";
 ! open(MYCSV, ">", `$outFile) or die "cannot open `$outFile\n";
-! print MYCSV "Result_File,Mass_Flow_kg_s,Static_PR,P_in_Pa,P_out_Pa,T_in_K,T_out_K,Isentropic_Efficiency,Blade_Count,Mass_Flow_Unit\n";
+! print MYCSV "Result_File,Mass_Flow_kg_s,Static_PR,P_in_Pa,P_out_Pa,T_in_K,T_out_K,Isentropic_Efficiency,Blade_Count,Mass_Flow_Unit,Total_PR\n";
 
 # 安全的浮点数提取函数
 ! sub get_num {
@@ -178,6 +152,9 @@ foreach ($file in $resFiles) {
 ! `$p_in    = get_num(evaluate("massFlowAve(Pressure)\@R1 Inlet"));
 ! `$p_out   = get_num(evaluate("massFlowAve(Pressure)\@R1 Outlet"));
 ! `$PR      = (`$p_in == 0) ? 0 : (`$p_out / `$p_in);
+! `$P_total_in  = get_num(evaluate("massFlowAve(Total Pressure in Stn Frame)\@R1 Inlet"));
+! `$P_total_out = get_num(evaluate("massFlowAve(Total Pressure in Stn Frame)\@R1 Outlet"));
+! `$TotalPR = (`$P_total_in == 0) ? 0 : (`$P_total_out / `$P_total_in);
 ! `$t_in    = get_num(evaluate("massFlowAve(Temperature)\@R1 Inlet"));
 ! `$t_out   = get_num(evaluate("massFlowAve(Temperature)\@R1 Outlet"));
 
@@ -185,7 +162,7 @@ foreach ($file in $resFiles) {
 ! `$is_eff  = get_num(evaluate("massFlowAve(Isentropic Compression Efficiency)\@R1 Outlet"));
 
 # 写入 CSV（整机流量 = 单流道流量 × 叶片数）
-! printf MYCSV ("%s,%.6f,%.4f,%.4f,%.4f,%.4f,%.4f,%.6f,%.6f,%s\n", `$currentRes, `$massFlow * $BladeCount, `$PR, `$p_in, `$p_out, `$t_in, `$t_out, `$is_eff, $BladeCount, "$MassFlowUnit");
+! printf MYCSV ("%s,%.6f,%.4f,%.4f,%.4f,%.4f,%.4f,%.6f,%.6f,%s,%.6f\n", `$currentRes, `$massFlow * $BladeCount, `$PR, `$p_in, `$p_out, `$t_in, `$t_out, `$is_eff, $BladeCount, "$MassFlowUnit", `$TotalPR);
 ! close(MYCSV);
 > quit
 "@
@@ -211,6 +188,7 @@ foreach ($file in $resFiles) {
 
     $record | Add-Member -NotePropertyName Result_LastWriteUtcTicks -NotePropertyValue ([string]$file.LastWriteTimeUtc.Ticks) -Force
     $record | Add-Member -NotePropertyName Result_Size_Bytes -NotePropertyValue ([string]$file.Length) -Force
+    Add-MapMetadata $record
     $records[$resFileName] = $record
     $extractedCount++
 

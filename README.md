@@ -107,3 +107,19 @@ SpeedRPM,InitialPressurePa
 
 - `.gitignore` 已默认忽略常见结果文件、缓存文件和大体积输出。
 - 当前仓库保留核心脚本与 GUI 文件，模板输入文件需由使用方自行提供。
+
+## CSV 格式与离线绘图
+
+字段、流量单位、静压比/静止系总压比、旧表迁移和 Windows 验证步骤见 [数据格式规范](docs/data_format.md)。合成示例可直接出图：
+
+```bash
+python -m pip install -r requirements.txt
+python plot_compressor_map.py --input examples/compressor_map.csv --output out.png
+python plot_compressor_map.py --input examples/compressor_map.csv --output total.png --pr-type total --design-point examples/design_point.csv
+python -m unittest discover -s tests -v
+pwsh -NoProfile -File tests/test_map_data.ps1
+```
+
+默认仍绘制静压比；优化结果对接使用 `--pr-type total`。设计点采用相同格式的一行 CSV。`Mass_Flow_kg_s` 始终是 kg/s，`Mass_Flow_Unit` 只记录提取时 CFD-Post 的原始单位。
+
+移除了未被仓库调用的旧 `cfx_runner.py`（包含其他项目的硬编码路径）；扫描和提取继续使用 PowerShell 入口。

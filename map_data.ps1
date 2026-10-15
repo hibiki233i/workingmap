@@ -1,0 +1,37 @@
+# Shared CSV contract for scan and batch extraction. Numeric strings use invariant culture.
+$mapCsvHeader = 'Result_File,Mass_Flow_kg_s,Static_PR,P_in_Pa,P_out_Pa,T_in_K,T_out_K,Isentropic_Efficiency,Blade_Count,Mass_Flow_Unit,Result_LastWriteUtcTicks,Result_Size_Bytes,schema_version,Speed_RPM,Back_Pressure_Pa,Total_PR'
+
+function Add-MapMetadata {
+    param([object]$Record)
+    foreach ($name in @('schema_version', 'Speed_RPM', 'Back_Pressure_Pa', 'Total_PR')) {
+        if (-not ($Record.PSObject.Properties.Name -contains $name)) {
+            $Record | Add-Member -NotePropertyName $name -NotePropertyValue ''
+        }
+    }
+    if ([string]::IsNullOrWhiteSpace([string]$Record.Speed_RPM) -or
+        [string]::IsNullOrWhiteSpace([string]$Record.Back_Pressure_Pa)) {
+        if ([string]$Record.Result_File -match 'Map_Speed_(\d+)_Press_([-+]?\d+(?:\.\d+)?)') {
+            if ([string]::IsNullOrWhiteSpace([string]$Record.Speed_RPM)) { $Record.Speed_RPM = $Matches[1] }
+            if ([string]::IsNullOrWhiteSpace([string]$Record.Back_Pressure_Pa)) { $Record.Back_Pressure_Pa = $Matches[2] }
+        } else {
+            Write-Warning "Cannot infer Speed_RPM / Back_Pressure_Pa from '$($Record.Result_File)'; fill these CSV columns before plotting."
+        }
+    }
+    # An upgrade must not label incomplete legacy rows as schema v1.
+    if ($Record.Total_PR -and $Record.Speed_RPM -and ([string]$Record.Back_Pressure_Pa -ne '')) {
+        $Record.schema_version = '1'
+    }
+}
+
+function Write-MapCsvRecord {
+    param([string]$Path, [object]$Record)
+    Add-MapMetadata $Record
+    $fields = foreach ($name in $mapCsvHeader.Split(',')) {
+        $value = $Record.$name
+        if ($value -is [System.IFormattable]) {
+            $value = $value.ToString($null, [System.Globalization.CultureInfo]::InvariantCulture)
+        }
+        '"' + ([string]$value).Replace('"', '""') + '"'
+    }
+    Add-Content -LiteralPath $Path -Value ($fields -join ',') -Encoding UTF8
+}
