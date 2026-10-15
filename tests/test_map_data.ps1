@@ -111,6 +111,33 @@ sub evaluate {
         Assert-Equal $postCounter.Value ($callsBefore + 1)
         & (Join-Path $repo 'extract_existing_map_data.ps1') -CsvFile rebuilt.csv -BladeCount 10 -MassFlowUnit 'g/s'
         Assert-Equal (Import-Csv rebuilt.csv).Total_PR 2
+
+        # Arbitrary result names have no plotting metadata, but physical data is cacheable.
+        $arbitraryDir = Join-Path $temp 'arbitrary'
+        New-Item -ItemType Directory $arbitraryDir | Out-Null
+        Push-Location $arbitraryDir
+        try {
+            'fake result' | Set-Content 'custom.res'
+            $callsBefore = $postCounter.Value
+            & (Join-Path $repo 'data_only.ps1') -BladeCount 10 -MassFlowUnit 'g/s'
+            $custom = Import-Csv 'Extracted_Compressor_Data.csv'
+            Assert-Equal $custom.schema_version ''
+            Assert-Equal $custom.Total_PR 2
+            & (Join-Path $repo 'data_only.ps1') -BladeCount 10 -MassFlowUnit 'g/s'
+            Assert-Equal $postCounter.Value ($callsBefore + 1)
+            # Manually supplied metadata must survive a cache hit without editing the version.
+            $custom.Speed_RPM = '45000'; $custom.Back_Pressure_Pa = '11'
+            $custom | Export-Csv 'Extracted_Compressor_Data.csv' -NoTypeInformation
+            & (Join-Path $repo 'data_only.ps1') -BladeCount 10 -MassFlowUnit 'g/s'
+            Assert-Equal $postCounter.Value ($callsBefore + 1)
+            $custom = Import-Csv 'Extracted_Compressor_Data.csv'
+            Assert-Equal $custom.Speed_RPM 45000
+            Assert-Equal $custom.Back_Pressure_Pa 11
+            $csvFile = Join-Path $arbitraryDir 'Extracted_Compressor_Data.csv'
+            $cached = Invoke-PostProcessForPoint 'custom.res'
+            Assert-Equal $postCounter.Value ($callsBefore + 1)
+            Assert-Equal $cached.Speed_RPM 45000
+        } finally { Pop-Location }
     } finally { Pop-Location }
     foreach ($file in Get-ChildItem $repo -Filter '*.ps1') {
         $errors = $null

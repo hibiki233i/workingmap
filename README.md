@@ -120,6 +120,6 @@ python -m unittest discover -s tests -v
 pwsh -NoProfile -File tests/test_map_data.ps1
 ```
 
-默认仍绘制静压比；优化结果对接使用 `--pr-type total`。设计点采用相同格式的一行 CSV。`Mass_Flow_kg_s` 始终是 kg/s，`Mass_Flow_Unit` 只记录提取时 CFD-Post 的原始单位。
+默认仍绘制静压比；优化结果对接使用 `--pr-type total`。GUI 在“求解与绘图参数 → 绘图压比”选择“静止系总压比”，设置会保存，并同时用于手动与自动绘图。设计点采用相同格式的一行 CSV。`Mass_Flow_kg_s` 始终是 kg/s，`Mass_Flow_Unit` 只记录提取时 CFD-Post 的原始单位。
 
 移除了未被仓库调用的旧 `cfx_runner.py`（包含其他项目的硬编码路径）；扫描和提取继续使用 PowerShell 入口。

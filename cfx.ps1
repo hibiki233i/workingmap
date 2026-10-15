@@ -616,7 +616,7 @@ function Invoke-PostProcessForPoint {
     $resultSizeBytes = $resultInfo.Length
     $cached = Get-CsvRecordByResultFile -Path $csvFile -ResultFile $ResultFile
     if ($null -ne $cached) {
-        if ([string]$cached.schema_version -ne "1" -or [string]::IsNullOrWhiteSpace([string]$cached.Total_PR)) {
+        if ([string]::IsNullOrWhiteSpace([string]$cached.Total_PR)) {
             $cached = $null
         } elseif (-not ($cached.PSObject.Properties.Name -contains "Isentropic_Efficiency") -or [string]::IsNullOrWhiteSpace([string]$cached.Isentropic_Efficiency)) {
             $cached = $null

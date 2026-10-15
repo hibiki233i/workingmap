@@ -59,8 +59,8 @@ function Test-RecordCurrent {
         return $false
     }
 
-    if ((Get-FieldText $Record "schema_version") -ne "1" -or
-        -not (Get-FieldText $Record "Total_PR")) { return $false }
+    # Plotting metadata can be incomplete for arbitrary result filenames.
+    if (-not (Get-FieldText $Record "Total_PR")) { return $false }
 
     return ([math]::Abs($recordBladeCount - $BladeCount) -le 1e-9) -and
         ((Get-FieldText $Record "Mass_Flow_Unit") -eq $MassFlowUnit) -and
