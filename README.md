@@ -53,15 +53,30 @@ workingmap 用来给一个压气机设计画出**特性图**（也叫工作图�
 
 ## 离线快速开始
 
+macOS / Linux：
+
 ```sh
 python3 -m venv .venv
-source .venv/bin/activate          # Windows 用 .venv\Scripts\activate
+source .venv/bin/activate
 python -m pip install -r requirements.txt
 python plot_compressor_map.py --input examples/compressor_map.csv --output out.png
 python -m unittest discover -s tests -v
 ```
 
-第三行安装依赖；第四行用自带的合成数据画一张特性图 `out.png`；第五行运行全部自动测试。
+Windows（PowerShell；`py` 是 python.org 安装包自带的启动器）：
+
+```powershell
+py -3 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+python plot_compressor_map.py --input examples/compressor_map.csv --output out.png
+python -m unittest discover -s tests -v
+```
+
+如果 PowerShell 提示禁止运行脚本，可先执行 `Set-ExecutionPolicy -Scope Process RemoteSigned`（仅对当前窗口有效），
+或改用 `cmd` 并运行 `.venv\Scripts\activate.bat`。
+
+前三行建好隔离的运行环境并安装依赖；第四行用自带的合成数据画一张特性图 `out.png`；最后一行运行全部自动测试。
 
 再试几个常用变体：
 
