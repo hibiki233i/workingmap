@@ -88,6 +88,15 @@ sub evaluate {
         & (Join-Path $repo 'data_only.ps1') -BladeCount 10 -MassFlowUnit 'g/s'
         Assert-Equal $postCounter.Value 2
         Assert-Equal @(Import-Csv 'Extracted_Compressor_Data.csv').Count 1
+        foreach ($invalidRatio in @('0.000000', '-1', 'NaN', 'Infinity', '-Infinity', 'not-a-number')) {
+            $invalid = Import-Csv 'Extracted_Compressor_Data.csv'
+            $invalid.Total_PR = $invalidRatio
+            $invalid | Export-Csv 'Extracted_Compressor_Data.csv' -NoTypeInformation
+            $callsBefore = $postCounter.Value
+            & (Join-Path $repo 'data_only.ps1') -BladeCount 10 -MassFlowUnit 'g/s'
+            Assert-Equal $postCounter.Value ($callsBefore + 1)
+            Assert-Equal (Import-Csv 'Extracted_Compressor_Data.csv').Total_PR 2
+        }
 
         $csvFile = Join-Path $temp 'scan.csv'
         $BladeCount = 10; $MassFlowUnit = 'g/s'; $massFlowToKgFactor = 0.001
@@ -109,6 +118,14 @@ sub evaluate {
         $refreshed = Invoke-PostProcessForPoint 'Map_Speed_50000_Press_12.5.res'
         Assert-Equal $refreshed.Total_PR 2
         Assert-Equal $postCounter.Value ($callsBefore + 1)
+        foreach ($invalidRatio in @('0.000000', '-1', 'NaN', 'Infinity', '-Infinity', 'not-a-number')) {
+            $badCache.Total_PR = $invalidRatio
+            $badCache | Export-Csv $csvFile -NoTypeInformation
+            $callsBefore = $postCounter.Value
+            $refreshed = Invoke-PostProcessForPoint 'Map_Speed_50000_Press_12.5.res'
+            Assert-Equal $refreshed.Total_PR 2
+            Assert-Equal $postCounter.Value ($callsBefore + 1)
+        }
         & (Join-Path $repo 'extract_existing_map_data.ps1') -CsvFile rebuilt.csv -BladeCount 10 -MassFlowUnit 'g/s'
         Assert-Equal (Import-Csv rebuilt.csv).Total_PR 2
 

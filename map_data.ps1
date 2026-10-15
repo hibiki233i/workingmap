@@ -1,6 +1,14 @@
 # Shared CSV contract for scan and batch extraction. Numeric strings use invariant culture.
 $mapCsvHeader = 'Result_File,Mass_Flow_kg_s,Static_PR,P_in_Pa,P_out_Pa,T_in_K,T_out_K,Isentropic_Efficiency,Blade_Count,Mass_Flow_Unit,Result_LastWriteUtcTicks,Result_Size_Bytes,schema_version,Speed_RPM,Back_Pressure_Pa,Total_PR'
 
+function Test-MapTotalRatio {
+    param([string]$Value)
+    $ratio = 0.0
+    return [double]::TryParse($Value, [System.Globalization.NumberStyles]::Float,
+        [System.Globalization.CultureInfo]::InvariantCulture, [ref]$ratio) -and
+        -not [double]::IsNaN($ratio) -and -not [double]::IsInfinity($ratio) -and $ratio -gt 0
+}
+
 function Add-MapMetadata {
     param([object]$Record)
     foreach ($name in @('schema_version', 'Speed_RPM', 'Back_Pressure_Pa', 'Total_PR')) {
