@@ -9,7 +9,7 @@ flowchart LR
   C --> S["scan_points.csv<br/>base_map.ccl"]
   C --> D["design_point.csv<br/>manifest.json"]
   S --> X["cfx.ps1 扫点（Windows + CFX）"] --> M["Compressor_Map_Data.csv"]
-  M --> G["plot_compressor_map.py --pr-type total<br/>--design-point design_point.csv"]
+  M --> G["plot_compressor_map.py --style paper --pr-type static<br/>--design-point design_point.csv"]
   D --> G
 ```
 
@@ -51,9 +51,10 @@ python from_optimization.py --source blade \
 | `--speed-span` / `--speed-step` | 转速线为设计转速 × (1 ± k·step)，默认 ±20%、步长 5%，即 8000–12000 rpm 共 9 条 |
 | `--speeds-rpm` | 显式转速列表，覆盖 span/step |
 | `--initial-pressure-pa` | 每条转速线的起始背压，默认 5 Pa；不得达到 `cfx.ps1` 的安全上限 16 Pa |
-| `--pr-type` | 出图命令使用的压比，默认 `total`（优化目标） |
+| `--pr-type` | 出图命令使用的压比，默认 `static`；`total` 为优化目标口径 |
+| `--plot-style` | 出图命令的样式，默认 `paper`（论文风格的压比-流量、效率-流量图）；`map` 为原效率着色特性图 |
 | `--mass-flow-unit` | 传给 `cfx.ps1` 的 CFD-Post 流量单位，默认 `g/s`（两个优化仓库的 CFX 单位制） |
-| `--def-ccl` | 求解输入的 CCL 文本，用于核对 `MySpeed` / `MyBackPressure` 是否真的驱动转速和出口边界 |
+| `--def-ccl` | 求解输入的 CCL 文本，用于核对 `MySpeed` 是否驱动旋转域转速、`MyBackPressure` 是否被 `Boundary Type = OUTLET`（或 `OPENING`）的边界引用；监测点、初值或其他边界引用不算 |
 | `--bind-speed-domain` | 在 `base_map.ccl` 中为该旋转域写入 `Angular Velocity = MySpeed` |
 | `--source-repo` / `--source-commit` | 优化仓库的 checkout 路径（自动读取 commit）或 URL 加 commit |
 | `--data-source` | 数据性质，例如 `cfd`；以 `synthetic` 开头时图中标注 SYNTHETIC |
@@ -62,9 +63,9 @@ python from_optimization.py --source blade \
 
 - **叶轮**：结果表的行没有 run ID。转换器读取每个运行目录的 `input_parameters.json`（主动学习目录缺失时改查 `--audit-csv`），按设计变量逐项比对，容差为 `1e-6 + 1e-6·|值|`；`nBl` 按求解时实际执行的 `round(nBl)` 比较。同一设计重算过时，只取有 `CFX_Results.txt` 的那个目录；`input_parameters.json` 读不出的目录会跳过并记入 notes。最终必须恰好匹配一个目录，零个或多个都会报错并列出候选。
 - **叶片**：依次尝试行内 `case_dir`、`--runs-root` 下的 `<run_id>` / `cases/<run_id>`、结果表同级的 `cases/<run_id>`。`case_dir` 是优化机器上的绝对路径，换机器后会自动回退到后面几项。随后用 `candidate.json` 核对设计向量。
-- **求解文件**：叶片按 `cfx_state.json` 中已完成求解记录的 `result_file` 取 `.res`，不会被后来出现的其他 `.res` 替换；叶轮取最新 `.out` 对应的 `.res`。
+- **求解文件**：叶片按 `cfx_state.json` 中已完成（`complete` 或人工审核通过的 `review`）求解记录的 `result_file` 取 `.res`，不会被后来出现的其他 `.res` 替换；`cfx_state.json` 记录的求解未完成（`failed`、`running`、`needs_restart` 等）时直接报错，不回退到目录里的其他 `.res`。叶轮取最新 `.out` 对应的 `.res`。
 - **叶轮 runner 在后处理成功后会删除 `Impeller.def` 和网格**（`cfx_runner.py` 的清理步骤），运行目录里通常只剩 `.res`。这时转换器把 `.res` 作为 `-DefFile` 和 `-InitialResFile`，并在 manifest 中写明，需按下文第 4 步在 Windows 上单点验证。
-- **性能核对**：如有 `CFX_Results.txt`（单流道流量和功率），按流道数换算后与结果表比对，相对容差 1e-5。不一致只记录在 manifest 中，设计点仍使用结果表中的优化记录。叶轮 Pareto 表不含静压比，转换器从 `CFX_Results.txt` 补齐；两处都没有时，设计点只能以总压比出图。
+- **性能核对**：如有 `CFX_Results.txt`（单流道流量和功率），按流道数换算后与结果表比对，相对容差 1e-5。不一致只记录在 manifest 中，设计点仍使用结果表中的优化记录。叶轮 Pareto 表不含静压比，转换器从 `CFX_Results.txt` 补齐；两处都没有时，设计点只能以总压比出图（`--pr-type total`）。
 
 ## 输出
 
@@ -92,9 +93,21 @@ manifest（`manifest_version = 1`）主要字段：
 
 输出目录必须是新目录或空目录，避免覆盖描述已有扫点的 manifest。
 
+## 出图
+
+`commands.plot` 默认使用 `plot_compressor_map.py --style paper`，按论文插图习惯绘制双栏宽（7.0 in）的两幅子图：
+
+- (a) 压比-质量流量：每条转速线一种开口标记，颜色按转速顺序取 viridis 色带（灰度打印仍可区分顺序），虚线为喘振线，只连接各转速线的喘振点；
+- (b) 等熵效率-质量流量：同一套标记和颜色；
+- 两幅图都用黑色星号标出设计点，图下注释写明优化记录的流量、压比、效率和工况，以及 `--design-label` 给出的来源；
+- 衬线字体（Times New Roman，缺失时依次回退到 STIX、DejaVu Serif），刻度朝内并画在四边，图例置于两幅子图上方；
+- 输出格式由扩展名决定：`.png` 为 600 dpi，`.pdf` / `.svg` 为矢量图，PDF 内嵌 TrueType 字体，可在排版软件中编辑。
+
+`--plot-style map` 仍可输出原来的效率着色特性图。GUI 的手动和自动绘图不受影响，继续使用特性图样式。
+
 ## 口径
 
-- **压比**：两个优化仓库 CSV 中的 `totalpressureratio` 与本仓库 `Total_PR` 定义一致，都是静止系质量流量平均总压的出口/进口比值；`PressureRatio` 与 `Static_PR` 都是静压比。出图命令默认 `--pr-type total`，与优化目标一致。
+- **压比**：两个优化仓库 CSV 中的 `totalpressureratio` 与本仓库 `Total_PR` 定义一致，都是静止系质量流量平均总压的出口/进口比值；`PressureRatio` 与 `Static_PR` 都是静压比。出图命令默认 `--pr-type static`（静压比）；需要与优化目标对照时改用 `--pr-type total`。
 - **流量**：优化 CSV 的 `MassFlow` 是全叶轮流量，单位相当于 g/s。设计点写为 `Mass_Flow_kg_s = MassFlow/1000`、`Blade_Count = 流道数`；出图命令使用 `--blade-count <流道数>`，星号横坐标即为 `MassFlow`。`cfx.ps1` 使用相同的 `-BladeCount`，扫点结果与设计点按同一口径换算。
 - **背压**：`MyBackPressure` 与优化 runner 写入 `update_bc.ccl` 的是同一个表达式，数值约定相同（相对模板参考压力）。
 
@@ -109,14 +122,14 @@ manifest（`manifest_version = 1`）主要字段：
 
 1. 在工程机上准备本仓库、Python 3（numpy、matplotlib）、PowerShell 7，并确认 `cfx5solve`、`cfx5post`、`cfx5cmds` 可用。下文命令中的 `python` 可换成 `py -3`。
 2. 导出求解输入的 CCL：`cfx5cmds -read -def <运行目录>\Impeller.def -text def.ccl`。叶轮运行目录中没有 `.def` 时，对 `.res` 执行同一命令。
-3. 按“用法”运行转换器，并加 `--def-ccl def.ccl`。如果报错 `rotor speed ignores MySpeed`，按错误信息中的旋转域名称加 `--bind-speed-domain <域名>`（通常为 `R1`）重新运行；如果报错 `no boundary uses MyBackPressure`，说明模板出口不引用该表达式，需要先修改模板。
+3. 按“用法”运行转换器，并加 `--def-ccl def.ccl`。如果报错 `rotor speed ignores MySpeed`，按错误信息中的旋转域名称加 `--bind-speed-domain <域名>`（通常为 `R1`）重新运行；如果报错 `no OUTLET/OPENING boundary uses MyBackPressure`，说明出口边界不引用该表达式（错误信息会列出实际引用它的位置），需要先修改模板。
 4. **单点验证**（必做）：
    - 把 `scan_points.csv` 改为只有设计转速一行、起始背压等于设计背压，运行 manifest 中 `commands.cfx_sweep` 的命令。
    - 新增的 `Compressor_Map_Data.csv` 行中，`Total_PR`、`Isentropic_Efficiency` 和 `Mass_Flow_kg_s × 1000` 应与 `recorded_performance` 在收敛容差内一致。流量相差 1000 倍说明 `--mass-flow-unit` 选错了。
    - 再取一个非设计转速（例如 9000 rpm）单点计算，在 CFD-Post 中确认转速确实改变，证明 `MySpeed` 生效。
    - 如果求解输入是 `.res`，而 `cfx5solve` 不接受它作为 `-def`，可在 CFX-Pre 中打开该 `.res` 另存为 `.def`，再把命令中的 `-DefFile` 换成新文件。
 5. 完整扫描：恢复 `scan_points.csv`（或重新运行转换器输出到新目录），运行 `commands.cfx_sweep`。已算过的工况会被 `cfx.ps1` 复用。
-6. 出图：运行 `commands.plot`。星号应落在设计转速线上设计背压附近；明显偏离时，先排查第 4 步的各项。
+6. 出图：运行 `commands.plot`，得到论文风格的 (a) 静压比-流量、(b) 效率-流量图。星号应落在设计转速线上设计背压附近；明显偏离时，先排查第 4 步的各项。投稿用矢量图时把 `--output` 的扩展名改为 `.pdf` 或 `.svg`。
 7. 归档 `manifest.json`、`Compressor_Map_Data.csv` 和特性图。manifest 记录了结果表的 SHA-256 和优化仓库 commit，可以对应回优化时的状态。
 
 真实扫点结果不是本仓库离线测试的验收条件。

@@ -94,6 +94,41 @@ class MapDataTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(output.read_bytes()[:8], b'\x89PNG\r\n\x1a\n')
 
+    def test_paper_style_writes_raster_and_vector_figures(self):
+        signatures = {'.png': b'\x89PNG\r\n\x1a\n', '.pdf': b'%PDF', '.svg': b'<?xml'}
+        for pr_type, suffix in (('static', '.png'), ('total', '.png'), ('static', '.pdf'), ('static', '.svg')):
+            with self.subTest(pr_type=pr_type, suffix=suffix):
+                output = Path(self.temp.name) / f'paper_{pr_type}{suffix}'
+                result = subprocess.run([sys.executable, str(ROOT / 'plot_compressor_map.py'),
+                    '--input', str(ROOT / 'examples' / 'compressor_map.csv'), '--output', str(output),
+                    '--efficiency-input', '', '--style', 'paper', '--pr-type', pr_type,
+                    '--design-point', str(ROOT / 'examples' / 'design_point.csv'), '--design-label', 'example'],
+                    capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertTrue(output.read_bytes().startswith(signatures[suffix]))
+
+    def test_paper_style_without_efficiency_data(self):
+        output = Path(self.temp.name) / 'legacy.png'
+        result = subprocess.run([sys.executable, str(ROOT / 'plot_compressor_map.py'),
+            '--input', str(ROOT / 'examples' / 'legacy_map.csv'), '--output', str(output),
+            '--efficiency-input', '', '--style', 'paper'], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(output.read_bytes()[:8], b'\x89PNG\r\n\x1a\n')
+
+    def test_paper_surge_line_spans_only_the_surge_points(self):
+        surge = [dict(mass_flow_gs=flow, pressure_ratio=1.0 + flow / 10) for flow in (3.0, 4.0, 5.0)]
+        x, y = plot.surge_line_xy({'predictor': lambda flow: 1.0 + flow / 10}, surge)
+        self.assertEqual((x[0], x[-1]), (3.0, 5.0))
+        self.assertAlmostEqual(y[-1], 1.5)
+
+    def test_paper_note_records_the_design_point(self):
+        point = dict(mass_flow_gs=4.49925, pressure_ratio=1.2449, efficiency_pct=74.87, speed=10000.0,
+                     target_pressure=12.0)
+        self.assertEqual(plot.design_point_note(point, 'static', 'impeller engineering_rank=1').splitlines(), [
+            r'Design point (optimization record): $\dot{m}$ = 4.50 g/s, $\pi_\mathrm{s}$ = 1.245, '
+            r'$\eta_\mathrm{is}$ = 74.9 %, 10000 rpm, back pressure 12 Pa',
+            'Source: impeller engineering_rank=1'])
+
     def test_legacy_efficiency_csv_does_not_block_total_map(self):
         legacy = Path(self.temp.name) / 'Extracted_Compressor_Data.csv'
         legacy.write_text((ROOT / 'examples' / 'legacy_map.csv').read_text(encoding='utf-8'), encoding='utf-8')

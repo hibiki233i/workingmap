@@ -110,7 +110,7 @@ def def_ccl_text(angular_velocity):
         "    END", "  END", "END",
         "FLOW: Flow Analysis 1", "  DOMAIN: R1", "    DOMAIN MODELS:", "      DOMAIN MOTION:",
         f"        Angular Velocity = {angular_velocity}", "        Option = Rotating", "      END", "    END",
-        "    BOUNDARY: R1 Outlet", "      BOUNDARY CONDITIONS:", "        MASS AND MOMENTUM:",
+        "    BOUNDARY: R1 Outlet", "      Boundary Type = OUTLET", "      BOUNDARY CONDITIONS:", "        MASS AND MOMENTUM:",
         "          Option = Average Static Pressure", "          Relative Pressure = MyBackPressure",
         "        END", "      END", "    END", "  END", "END", ""])
 

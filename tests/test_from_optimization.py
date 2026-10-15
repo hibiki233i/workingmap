@@ -38,6 +38,7 @@ FLOW: Flow Analysis 1
       END
     END
     BOUNDARY: R1 Outlet
+      Boundary Type = OUTLET
       BOUNDARY CONDITIONS:
         MASS AND MOMENTUM:
           Option = Average Static Pressure
@@ -174,7 +175,9 @@ class ImpellerTests(ConverterTestCase):
         self.assertAlmostEqual(static['pressure_ratio'], 1.1855, places=12)
         self.assertAlmostEqual(total['efficiency_pct'], 74.86677355674427, places=10)
         self.assertEqual(read_csv(design)[0]['Blade_Count'], '11')
-        self.assertEqual(manifest['commands']['plot']['argv'][-1], str(self.out / 'compressor_map_total.png'))
+        argv = manifest['commands']['plot']['argv']
+        self.assertEqual((argv[argv.index('--style') + 1], argv[argv.index('--pr-type') + 1], argv[-1]),
+                         ('paper', 'static', str(self.out / 'compressor_map_static.png')))
 
     def test_existing_def_is_preferred_and_res_is_the_initial_field(self):
         self.impeller_run('Run_031', definition=True)
@@ -248,9 +251,9 @@ class ImpellerTests(ConverterTestCase):
         self.impeller_run('Run_031', results=False)
         args = ['--source', 'impeller', '--results', str(self.impeller_results()), '--select', 'engineering_rank=1',
                 '--runs-root', str(self.root / 'Runs')]
-        with self.assertRaisesRegex(fo.ConversionError, 'static pressure ratio'):
-            self.convert(*args, '--pr-type', 'static')
-        manifest = self.convert(*args)
+        with self.assertRaisesRegex(fo.ConversionError, 'static pressure ratio.*use --pr-type total'):
+            self.convert(*args)
+        manifest = self.convert(*args, '--pr-type', 'total')
         self.assertEqual(read_csv(self.out / 'design_point.csv')[0]['Static_PR'], '')
         self.assertTrue(any('Static pressure ratio is unknown' in note for note in manifest['notes']))
 
@@ -312,6 +315,15 @@ class BladeTests(ConverterTestCase):
         case = self.blade_case(result_file='missing.res')
         with self.assertRaisesRegex(fo.ConversionError, 'missing.res'):
             self.convert('--source', 'blade', '--results', str(self.blade_results()), '--run-dir', str(case))
+
+    def test_unaccepted_solve_is_rejected_despite_a_res_file(self):
+        # Codex review P2: never fall back to a .res the receipt did not accept.
+        for status in ('failed', 'running', 'needs_restart'):
+            with self.subTest(status=status):
+                case = self.blade_case(run_id=f'case_{status}', status=status)
+                with self.assertRaisesRegex(fo.ConversionError, f"solve status '{status}' without an accepted"):
+                    self.convert('--source', 'blade', '--results', str(self.blade_results()), '--run-dir', str(case))
+                self.assertFalse(self.out.exists())
 
 
 class SweepTests(ConverterTestCase):
@@ -386,6 +398,37 @@ class ExpressionBindingTests(ConverterTestCase):
         report = fo.expression_binding(BOUND_CCL.replace('MyBackPressure\n', '12 [Pa]\n'))
         self.assertEqual((report['status'], report['back_pressure']['bound']), ('not_bound', False))
 
+    def test_back_pressure_must_reach_an_outlet_boundary(self):
+        # Codex review P1: a monitor or another boundary using the expression leaves the outlet hard-coded.
+        outlet_fixed = BOUND_CCL.replace('MyBackPressure\n', '12 [Pa]\n')
+        hard_coded = outlet_fixed[:outlet_fixed.rindex('  END\nEND\n')] + ('''    BOUNDARY: R1 Inlet
+      Boundary Type = INLET
+      BOUNDARY CONDITIONS:
+        MASS AND MOMENTUM:
+          Relative Pressure = MyBackPressure
+        END
+      END
+    END
+  END
+  OUTPUT CONTROL:
+    MONITOR OBJECTS:
+      MONITOR POINT: Back pressure
+        Expression Value = MyBackPressure
+      END
+    END
+  END
+END
+''')
+        report = fo.expression_binding(hard_coded)
+        self.assertEqual((report['status'], report['back_pressure']['used_by']), ('not_bound', []))
+        self.assertEqual(len(report['back_pressure']['ignored_uses']), 2)
+        self.blade_case()
+        def_ccl = self.root / 'def.ccl'
+        def_ccl.write_text(hard_coded, encoding='utf-8')
+        with self.assertRaisesRegex(fo.ConversionError, 'no OUTLET/OPENING boundary.*only used by'):
+            self.convert('--source', 'blade', '--results', str(self.blade_results()),
+                         '--runs-root', str(self.root / 'blade_output'), '--def-ccl', str(def_ccl))
+
 
 class ProvenanceTests(unittest.TestCase):
     def test_credentials_are_removed_from_remote_urls(self):
@@ -415,20 +458,22 @@ class OfflineExampleTests(unittest.TestCase):
             output = Path(temp) / 'chain'
             with contextlib.redirect_stdout(io.StringIO()):
                 self.assertEqual(example.main(['--output-dir', str(output)]), 0)
-            expected = {'impeller': ('engineering_rank=1', 'Run_031', 4.49925, 1.6819375, 11),
-                        'blade': ('run_id=case_000004', 'case_000004', 4.250168528720441, 2.1, 9)}
-            for name, (selection, run_id, flow, total, passages) in expected.items():
+            expected = {'impeller': ('engineering_rank=1', 'Run_031', 4.49925, 1.6819375, 1.244625, 11),
+                        'blade': ('run_id=case_000004', 'case_000004', 4.250168528720441, 2.1, 2.0, 9)}
+            for name, (selection, run_id, flow, total, static, passages) in expected.items():
                 with self.subTest(source=name):
                     manifest = json.loads((output / name / 'manifest.json').read_text(encoding='utf-8'))
                     self.assertEqual(manifest['source']['selection'], selection)
                     self.assertEqual(Path(manifest['run']['directory']).name, run_id)
                     self.assertEqual({key: value['status'] for key, value in manifest['checks'].items()},
                                      {'design_vector': 'match', 'performance': 'match', 'expression_binding': 'bound'})
-                    self.assertEqual((output / name / 'compressor_map_total.png').read_bytes()[:8],
+                    self.assertEqual((output / name / 'compressor_map_static.png').read_bytes()[:8],
                                      b'\x89PNG\r\n\x1a\n')
                     design = plot.load_rows(output / name / 'design_point.csv', passages, 'total')[0]
                     self.assertAlmostEqual(design['mass_flow_gs'], flow, places=9)
                     self.assertAlmostEqual(design['pressure_ratio'], total, places=12)
+                    static_point = plot.load_rows(output / name / 'design_point.csv', passages, 'static')[0]
+                    self.assertAlmostEqual(static_point['pressure_ratio'], static, places=12)
                     # The synthetic sweep's design speed line passes through the recorded point.
                     on_line = [row for row in plot.load_rows(output / name / 'Compressor_Map_Data.csv', passages, 'total')
                                if (row['speed'], row['target_pressure']) == (10000, 12)]

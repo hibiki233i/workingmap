@@ -6,6 +6,7 @@ import re
 import tempfile
 import warnings
 from collections import defaultdict
+from itertools import cycle
 from pathlib import Path
 
 os.environ.setdefault("MPLCONFIGDIR", str(Path(tempfile.gettempdir()) / "matplotlib"))
@@ -16,6 +17,44 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
+
+# Journal figure conventions: serif text with matching math, inward ticks on all
+# four sides, thin lines, open markers, TrueType fonts embedded in vector output.
+PAPER_STYLE = {
+    "font.family": "serif",
+    "font.serif": ["Times New Roman", "Times", "Nimbus Roman", "STIXGeneral", "DejaVu Serif"],
+    "mathtext.fontset": "stix",
+    "font.size": 9,
+    "axes.labelsize": 9,
+    "axes.titlesize": 9,
+    "axes.linewidth": 0.8,
+    "legend.fontsize": 8,
+    "xtick.labelsize": 8,
+    "ytick.labelsize": 8,
+    "xtick.direction": "in",
+    "ytick.direction": "in",
+    "xtick.top": True,
+    "ytick.right": True,
+    "xtick.minor.visible": True,
+    "ytick.minor.visible": True,
+    "xtick.major.size": 3.5,
+    "ytick.major.size": 3.5,
+    "xtick.minor.size": 2.0,
+    "ytick.minor.size": 2.0,
+    "xtick.major.width": 0.8,
+    "ytick.major.width": 0.8,
+    "xtick.minor.width": 0.6,
+    "ytick.minor.width": 0.6,
+    "lines.linewidth": 1.0,
+    "lines.markersize": 3.8,
+    "savefig.dpi": 600,
+    "pdf.fonttype": 42,
+    "ps.fonttype": 42,
+    "svg.fonttype": "none",
+}
+PAPER_MARKERS = ("o", "s", "^", "v", "D", "<", ">", "p", "h")
+PAPER_WIDTH_IN = 7.0  # double-column width
+PAPER_HEIGHT_IN = 3.4
 
 RUN_NAME_PATTERN = re.compile(r"Map_Speed_(?P<speed>\d+)_Press_(?P<pressure>[-+]?\d+(?:\.\d+)?)")
 
@@ -62,6 +101,10 @@ def parse_args():
     parser.add_argument("--pr-type", choices=("static", "total"), default="static",
                         help="Pressure ratio to plot (default: static, for legacy compatibility).")
     parser.add_argument("--design-point", help="Optional one-row map CSV marking the design point.")
+    parser.add_argument("--style", choices=("map", "paper"), default="map",
+                        help="map: efficiency-coloured performance map (default); paper: journal-style figure with "
+                             "(a) pressure ratio and (b) isentropic efficiency against mass flow. The output "
+                             "extension selects the format (.png at 600 dpi, .pdf/.svg as vector).")
     parser.add_argument("--design-label", default="",
                         help="Where the design point comes from, shown in its annotation (e.g. the optimization row).")
     return parser.parse_args()
@@ -676,6 +719,91 @@ def plot_map(grouped_points, output_path: Path, blade_count: float, surge_result
     plt.close(fig)
 
 
+def pressure_ratio_label(pr_type):
+    return (r"Total pressure ratio $\pi_\mathrm{t}$ (–)" if pr_type == "total"
+            else r"Static pressure ratio $\pi_\mathrm{s}$ (–)")
+
+
+def speed_line_xy(points, key):
+    """One speed line as (mass flows, values) ordered by flow, skipping missing values."""
+    pairs = sorted((point["mass_flow_gs"], point[key]) for point in points if point.get(key) is not None)
+    return [flow for flow, _ in pairs], [value for _, value in pairs]
+
+
+def surge_line_xy(surge_result, surge_points):
+    """The fitted surge line over the flow range of the surge points it was fitted to."""
+    flows = [point["mass_flow_gs"] for point in surge_points]
+    x = np.linspace(min(flows), max(flows), 200)
+    return x, np.array([float(surge_result["predictor"](value)) for value in x])
+
+
+def design_point_note(point, pr_type, label=""):
+    """Figure note with the optimization record of the design point."""
+    symbol = r"\pi_\mathrm{t}" if pr_type == "total" else r"\pi_\mathrm{s}"
+    values = [rf"$\dot{{m}}$ = {point['mass_flow_gs']:.2f} g/s", rf"${symbol}$ = {point['pressure_ratio']:.3f}"]
+    if point.get("efficiency_pct") is not None:
+        values.append(rf"$\eta_\mathrm{{is}}$ = {point['efficiency_pct']:.1f} %")
+    values.append(f"{point['speed']:g} rpm, back pressure {point['target_pressure']:g} Pa")
+    note = "Design point (optimization record): " + ", ".join(values)
+    return f"{note}\nSource: {label}" if label else note
+
+
+def plot_paper(grouped_points, output_path: Path, surge_result, pr_type="static", design_point=None,
+               design_label=""):
+    """(a) pressure ratio and (b) isentropic efficiency against mass flow, one curve per speed line."""
+    with plt.rc_context(PAPER_STYLE):
+        fig = plt.figure(figsize=(PAPER_WIDTH_IN, PAPER_HEIGHT_IN + (0.3 if design_point else 0.0)),
+                         constrained_layout=True)
+        rows = (0.17, 1.0, 0.11) if design_point else (0.17, 1.0)
+        grid = fig.add_gridspec(len(rows), 2, height_ratios=rows)
+        legend_ax = fig.add_subplot(grid[0, :])
+        ax_pr = fig.add_subplot(grid[1, 0])
+        ax_eff = fig.add_subplot(grid[1, 1], sharex=ax_pr)
+
+        speeds = sorted(grouped_points)
+        colors = plt.cm.viridis(np.linspace(0.0, 0.85, len(speeds))) if len(speeds) > 1 else ["#1b3a5c"]
+        handles = []
+        for speed, color, marker in zip(speeds, colors, cycle(PAPER_MARKERS)):
+            style = {"color": color, "marker": marker, "markerfacecolor": "white",
+                     "markeredgecolor": color, "markeredgewidth": 0.8}
+            handles.append(ax_pr.plot(*speed_line_xy(grouped_points[speed], "pressure_ratio"),
+                                      label=f"{speed:g} rpm", **style)[0])
+            flows, efficiencies = speed_line_xy(grouped_points[speed], "efficiency_pct")
+            if flows:
+                ax_eff.plot(flows, efficiencies, **style)
+
+        surge_points = extract_surge_points(grouped_points)
+        if surge_result is not None and len(surge_points) >= 2:
+            handles.append(ax_pr.plot(*surge_line_xy(surge_result, surge_points), color="black",
+                                      linestyle="--", linewidth=1.0, label="Surge line", zorder=1)[0])
+
+        if design_point is not None:
+            star = {"marker": "*", "markersize": 10, "color": "black", "markeredgecolor": "white",
+                    "markeredgewidth": 0.4, "linestyle": "none", "zorder": 6}
+            flow = design_point["mass_flow_gs"]
+            handles.append(ax_pr.plot([flow], [design_point["pressure_ratio"]], label="Design point", **star)[0])
+            if design_point.get("efficiency_pct") is not None:
+                ax_eff.plot([flow], [design_point["efficiency_pct"]], **star)
+            note_ax = fig.add_subplot(grid[2, :])
+            note_ax.axis("off")
+            note_ax.text(0.0, 1.0, design_point_note(design_point, pr_type, design_label), transform=note_ax.transAxes,
+                         ha="left", va="top", fontsize=7.5, color="#333333")
+
+        if not ax_eff.lines:
+            ax_eff.text(0.5, 0.5, "No efficiency data", transform=ax_eff.transAxes, ha="center", va="center")
+        legend_ax.axis("off")
+        legend_ax.legend(handles=handles, loc="center", ncol=min(6, len(handles)), frameon=False,
+                         handlelength=2.4, columnspacing=1.4)
+        for ax, panel, ylabel in ((ax_pr, "(a)", pressure_ratio_label(pr_type)),
+                                  (ax_eff, "(b)", r"Isentropic efficiency $\eta_\mathrm{is}$ (%)")):
+            ax.set_title(panel, loc="left")
+            ax.set_xlabel(r"Mass flow rate $\dot{m}$ (g/s)")
+            ax.set_ylabel(ylabel)
+            ax.margins(x=0.04, y=0.06)
+        fig.savefig(output_path)
+        plt.close(fig)
+
+
 def main():
     args = parse_args()
     input_path = Path(args.input)
@@ -707,8 +835,12 @@ def main():
     surge_points, surge_result, comparison = fit_surge_curve(grouped_points, args.fit_method)
     all_filtered = [p for pts in grouped_points.values() for p in pts]
     surge_result = enforce_surge_boundary(surge_result, all_filtered)
-    plot_map(grouped_points, Path(args.output), blade_count=args.blade_count, surge_result=surge_result,
-             pr_type=args.pr_type, design_point=design_point, design_label=args.design_label)
+    if args.style == "paper":
+        plot_paper(grouped_points, Path(args.output), surge_result=surge_result, pr_type=args.pr_type,
+                   design_point=design_point, design_label=args.design_label)
+    else:
+        plot_map(grouped_points, Path(args.output), blade_count=args.blade_count, surge_result=surge_result,
+                 pr_type=args.pr_type, design_point=design_point, design_label=args.design_label)
 
     if comparison:
         print("Surge fit comparison")

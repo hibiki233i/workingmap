@@ -103,8 +103,11 @@ def parse_args(argv=None):
     parser.add_argument("--speeds-rpm", help="Explicit comma-separated speed lines, rpm; overrides span/step.")
     parser.add_argument("--initial-pressure-pa", type=float, default=DEFAULT_INITIAL_PRESSURE_PA,
                         help=f"Starting back pressure of every speed line, Pa (default {DEFAULT_INITIAL_PRESSURE_PA:g}).")
-    parser.add_argument("--pr-type", choices=("static", "total"), default="total",
-                        help="Pressure ratio for the map plot command (default total, the optimization objective).")
+    parser.add_argument("--pr-type", choices=("static", "total"), default="static",
+                        help="Pressure ratio for the plot command (default static; total is the optimization objective).")
+    parser.add_argument("--plot-style", choices=("paper", "map"), default="paper",
+                        help="Plot command style: paper (pressure ratio and efficiency against mass flow, default) "
+                             "or map (efficiency-coloured performance map).")
     parser.add_argument("--mass-flow-unit", choices=("kg/s", "g/s"), default="g/s",
                         help="CFD-Post mass-flow unit to pass to cfx.ps1 (default g/s, the optimizers' CFX unit system).")
     parser.add_argument("--def-ccl", type=Path,
@@ -395,7 +398,9 @@ def locate_artifacts(run_dir, notes):
             if solve["status"] == "review":
                 notes.append("The blade case's final solve was accepted under manual review (near-converged).")
         else:
-            notes.append(f"cfx_state.json solve status is {solve.get('status')!r}; using the newest .res instead.")
+            # The receipt is authoritative: any other .res is a failed or unaccepted attempt.
+            raise ConversionError(f"{state_path} records solve status {solve.get('status')!r} without an accepted "
+                                  "result; this case has no result to start a sweep from.")
     if result is None:
         result = latest_result(run_dir, notes)
 
@@ -524,6 +529,7 @@ def check_pressures(initial, design, notes):
 
 # --------------------------------------------------------------------------- CCL
 
+BACK_PRESSURE_BOUNDARY_TYPES = {"OUTLET", "OPENING"}
 _CCL_BLOCK = re.compile(r"^[A-Z][A-Z0-9 _]*:")
 _CCL_ASSIGNMENT = re.compile(r"^\s*([^=:#]+?)\s*=\s*(.*?)\s*$")
 
@@ -572,13 +578,25 @@ def expression_binding(ccl_text, bind_domain=None):
     via_override = bind_domain is not None and bind_domain in unbound
     unbound.discard(bind_domain)
     speed_bound = bool(speeds) and not unbound
-    pressure_uses = [" / ".join((*path, f"{name} = {value}")) for path, name, value in assignments
-                     if references(value, "MyBackPressure", expressions)]
+
+    def boundary(path):
+        return next((path[:index + 1] for index in range(len(path) - 1, -1, -1)
+                     if path[index].upper().startswith("BOUNDARY:")), None)
+
+    # Only an outlet/opening boundary sets the back pressure; a monitor, initial
+    # value or other boundary using MyBackPressure leaves the outlet hard-coded.
+    types = {path: value.strip().upper() for path, name, value in assignments
+             if name == "Boundary Type" and boundary(path) == path}
+    uses = [(boundary(path) is not None and types.get(boundary(path)) in BACK_PRESSURE_BOUNDARY_TYPES,
+             " / ".join((*path, f"{name} = {value}")))
+            for path, name, value in assignments if references(value, "MyBackPressure", expressions)]
+    pressure_uses = [text for at_outlet, text in uses if at_outlet]
     return {
         "status": "bound" if speed_bound and pressure_uses else "not_bound",
         "speed": {"bound": speed_bound, "angular_velocity": [value for _, value in speeds],
                   "rotating_domains": sorted({name for name, _ in speeds}), "via_bind_speed_domain": via_override},
-        "back_pressure": {"bound": bool(pressure_uses), "used_by": pressure_uses},
+        "back_pressure": {"bound": bool(pressure_uses), "used_by": pressure_uses,
+                          "ignored_uses": [text for at_outlet, text in uses if not at_outlet]},
     }
 
 
@@ -730,7 +748,8 @@ def convert(args):
         static_source = None
         notes.append("Static pressure ratio is unknown; the design point can only be plotted with --pr-type total.")
     if args.pr_type == "static" and performance["PressureRatio"] is None:
-        raise ConversionError("--pr-type static needs a static pressure ratio, which neither the CSV nor CFX_Results.txt records.")
+        raise ConversionError("--pr-type static needs a static pressure ratio, which neither the CSV nor "
+                              "CFX_Results.txt records; use --pr-type total.")
 
     speeds = speed_lines(args, operating["speed_rpm"], notes)
     check_pressures(args.initial_pressure_pa, operating["back_pressure_pa"], notes)
@@ -749,7 +768,9 @@ def convert(args):
                                 f"{', '.join(binding['speed']['angular_velocity']) or 'none'}; rotating domains "
                                 f"{binding['speed']['rotating_domains'] or 'none'}) - rerun with --bind-speed-domain <domain>")
             if not binding["back_pressure"]["bound"]:
-                problems.append("no boundary uses MyBackPressure - the template outlet must reference it")
+                ignored = binding["back_pressure"]["ignored_uses"]
+                problems.append("no OUTLET/OPENING boundary uses MyBackPressure - the template outlet must reference it"
+                                + (f" (only used by: {'; '.join(ignored)})" if ignored else ""))
             raise ConversionError(f"{args.def_ccl}: cfx.ps1 could not vary the operating point: " + "; ".join(problems))
     else:
         notes.append("MySpeed/MyBackPressure binding unchecked; run cfx5cmds -read -def <solver input> -text def.ccl "
@@ -775,7 +796,7 @@ def convert(args):
                  "-BladeCount", str(operating["passage_count"]), "-MassFlowUnit", args.mass_flow_unit,
                  "-WorkingDirectory", str(output)]
     plot_argv = ["python", str(ROOT / "plot_compressor_map.py"), "--input", str(map_csv),
-                 "--efficiency-input", "", "--pr-type", args.pr_type,
+                 "--efficiency-input", "", "--style", args.plot_style, "--pr-type", args.pr_type,
                  "--blade-count", str(operating["passage_count"]), "--design-point", str(design_path),
                  "--design-label", label, "--output", str(map_png)]
 
@@ -816,7 +837,7 @@ def convert(args):
         "checks": {"design_vector": vector_check, "performance": perf_check, "expression_binding": binding},
         "sweep": {"design_speed_rpm": operating["speed_rpm"], "speeds_rpm": speeds,
                   "initial_pressure_pa": args.initial_pressure_pa, "max_safe_pressure_pa": MAX_SAFE_PRESSURE_PA,
-                  "mass_flow_unit": args.mass_flow_unit, "pr_type": args.pr_type},
+                  "mass_flow_unit": args.mass_flow_unit, "pr_type": args.pr_type, "plot_style": args.plot_style},
         "outputs": {"scan_points": scan_path.name, "base_ccl": ccl_path.name, "design_point": design_path.name,
                     "map_csv": map_csv.name, "map_png": map_png.name},
         "commands": {"cfx_sweep": {"argv": cfx_argv, "display": display_command(cfx_argv)},

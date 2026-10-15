@@ -10,17 +10,17 @@ python examples/from_optimization/run_example.py [--output-dir DIR]
 | --- | --- |
 | `impeller_runs/Runs/Run_XXX/` | 每个训练样本一个替身运行目录：`input_parameters.json`、`CFX_Results.txt`（单流道）、占位 `.out` / `.res`；与真实 runner 一样没有 `Impeller.def` |
 | `blade_runs/cases/case_XXXXXX/` | `candidate.json`、`cfx_state.json`（`p_out_pa=12`、`n_blades=9`）、`CFX_Results.txt`、占位 `Impeller.def` / `.res` |
-| `impeller/`、`blade/` | 转换器输出（`scan_points.csv`、`base_map.ccl`、`design_point.csv`、`manifest.json`）、合成的 `Compressor_Map_Data.csv` 和 `compressor_map_total.png` |
+| `impeller/`、`blade/` | 转换器输出（`scan_points.csv`、`base_map.ccl`、`design_point.csv`、`manifest.json`）、合成的 `Compressor_Map_Data.csv` 和论文风格的 `compressor_map_static.png`（(a) 静压比-流量，(b) 效率-流量） |
 | `impeller_def.ccl`、`blade_def.ccl` | 替身 CCL，分别演示“转速写死，需要 `--bind-speed-domain R1`”和“已由 `MySpeed` 驱动”两种情况，不代表真实模板 |
 
 选点与预期结果：
 
-| 链路 | 选择 | 定位结果 | 效率 | 总压比 | 流量 g/s | 流道数 |
-| --- | --- | --- | --- | --- | --- | --- |
-| 叶轮 | `engineering_rank=1` | 在 384 个目录中按设计向量匹配到 `Run_031` | 0.74867 | 1.68194 | 4.49925 | 11 |
-| 叶片 | `run_id=case_000004` | 记录的 `D:\...` 路径不存在，回退到 `blade_runs/cases/case_000004` | 0.76285 | 2.1 | 4.25017 | 9 |
+| 链路 | 选择 | 定位结果 | 效率 | 静压比 | 总压比 | 流量 g/s | 流道数 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 叶轮 | `engineering_rank=1` | 在 384 个目录中按设计向量匹配到 `Run_031` | 0.74867 | 1.24463（取自 `CFX_Results.txt`） | 1.68194 | 4.49925 | 11 |
+| 叶片 | `run_id=case_000004` | 记录的 `D:\...` 路径不存在，回退到 `blade_runs/cases/case_000004` | 0.76285 | 2.0 | 2.1 | 4.25017 | 9 |
 
-合成特性图的设计转速线在设计背压处正好经过设计点，所以星号必须落在 10000 rpm 线上；测试会检查这一点。
+合成特性图的设计转速线在设计背压处正好经过设计点，所以星号必须落在 10000 rpm 线上；测试会检查这一点。需要矢量图时，把 `manifest.json` 中 `commands.plot` 的 `--output` 改为 `.pdf` 或 `.svg` 后重新运行。
 
 ## 数据来源
 

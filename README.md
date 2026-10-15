@@ -132,4 +132,4 @@ pwsh -NoProfile -File tests/test_map_data.ps1
 python examples/from_optimization/run_example.py
 ```
 
-参数、定位规则、口径和 Windows 真实运行步骤见 [优化结果 → 特性图](docs/from_optimization.md)。
+最终出图默认是论文风格的 (a) 静压比-流量、(b) 效率-流量双子图（`plot_compressor_map.py --style paper`）。参数、定位规则、口径和 Windows 真实运行步骤见 [优化结果 → 特性图](docs/from_optimization.md)。
