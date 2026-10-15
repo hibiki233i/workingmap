@@ -21,6 +21,19 @@ try {
     Assert-Equal $loaded.Blade_Count ''
     Assert-Equal $loaded.Mass_Flow_kg_s '0.002'
 
+    # Rewriting populated records must preserve explicit versions, including future ones.
+    foreach ($version in @('2', '1', 'external-version', '', '   ')) {
+        $versioned = [pscustomobject]@{
+            schema_version = $version; Result_File = 'custom.res'
+            Total_PR = '1.6'; Speed_RPM = '50000'; Back_Pressure_Pa = '12.5'
+            Mass_Flow_kg_s = '0.002'; Static_PR = '1.4'; Blade_Count = '10'
+        }
+        $mapCsvHeader | Set-Content $path
+        Write-MapCsvRecord $path $versioned
+        $expectedVersion = if ([string]::IsNullOrWhiteSpace($version)) { '1' } else { $version }
+        Assert-Equal (Import-Csv $path).schema_version $expectedVersion
+    }
+
     # Load only functions from scan script: no solver or scan starts.
     $tokens = $null; $errors = $null
     $ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $repo 'cfx.ps1'), [ref]$tokens, [ref]$errors)
@@ -28,7 +41,10 @@ try {
         Invoke-Expression $func.Extent.Text
     }
     $resultCsvHeader = $mapCsvHeader
+    $versioned.schema_version = '2'
+    $versioned | Export-Csv $path -NoTypeInformation
     Ensure-MasterCsv $path
+    Assert-Equal (Import-Csv $path).schema_version '2'
     $converted = Convert-ToTotalFlowRecord -PointData ([pscustomobject]@{
         Result_File='custom.res'; Mass_Flow_kg_s=0.002; Static_PR=1.4; Total_PR=1.6
         Speed_RPM=50000; Back_Pressure_Pa=12.5; schema_version='1'; Blade_Count=1

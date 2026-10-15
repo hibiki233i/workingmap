@@ -25,8 +25,9 @@ function Add-MapMetadata {
             Write-Warning "Cannot infer Speed_RPM / Back_Pressure_Pa from '$($Record.Result_File)'; fill these CSV columns before plotting."
         }
     }
-    # An upgrade must not label incomplete legacy rows as schema v1.
-    if ($Record.Total_PR -and $Record.Speed_RPM -and ([string]$Record.Back_Pressure_Pa -ne '')) {
+    # Only fill an absent version; explicit versions keep their original semantics.
+    if ([string]::IsNullOrWhiteSpace([string]$Record.schema_version) -and
+        $Record.Total_PR -and $Record.Speed_RPM -and ([string]$Record.Back_Pressure_Pa -ne '')) {
         $Record.schema_version = '1'
     }
 }

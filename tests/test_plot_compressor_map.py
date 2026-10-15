@@ -72,6 +72,11 @@ class MapDataTests(unittest.TestCase):
                 with self.assertWarns(UserWarning):
                     self.assertEqual(plot.load_rows(self.path, 10, pr_type='total'), [])
 
+    def test_unsupported_version_is_rejected(self):
+        self.write_rows([self.point(schema_version='2')])
+        with self.assertRaisesRegex(ValueError, 'unsupported schema_version'):
+            plot.load_rows(self.path, 10)
+
     def test_invalid_plot_blade_count(self):
         self.write_rows([self.point()])
         for count in (0, -1, float('nan')):
