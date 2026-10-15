@@ -123,3 +123,13 @@ pwsh -NoProfile -File tests/test_map_data.ps1
 默认仍绘制静压比；优化结果对接使用 `--pr-type total`。GUI 在“求解与绘图参数 → 绘图压比”选择“静止系总压比”，设置会保存，并同时用于手动与自动绘图。设计点采用相同格式的一行 CSV。`Mass_Flow_kg_s` 始终是 kg/s，`Mass_Flow_Unit` 只记录提取时 CFD-Post 的原始单位。
 
 移除了未被仓库调用的旧 `cfx_runner.py`（包含其他项目的硬编码路径）；扫描和提取继续使用 PowerShell 入口。
+
+## 从优化结果生成特性图
+
+[from_optimization.py](from_optimization.py) 读取叶轮或叶片优化 Pareto 表中选定的一行，找到该点的 CFD 运行目录，生成 `scan_points.csv`、`base_map.ccl`（`MySpeed` / `MyBackPressure`）、`design_point.csv` 和记录来源的 `manifest.json`，manifest 中附带后续扫点和出图命令。离线示例一条命令跑通叶轮和叶片两条链路（合成数据）：
+
+```bash
+python examples/from_optimization/run_example.py
+```
+
+参数、定位规则、口径和 Windows 真实运行步骤见 [优化结果 → 特性图](docs/from_optimization.md)。

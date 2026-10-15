@@ -62,6 +62,8 @@ def parse_args():
     parser.add_argument("--pr-type", choices=("static", "total"), default="static",
                         help="Pressure ratio to plot (default: static, for legacy compatibility).")
     parser.add_argument("--design-point", help="Optional one-row map CSV marking the design point.")
+    parser.add_argument("--design-label", default="",
+                        help="Where the design point comes from, shown in its annotation (e.g. the optimization row).")
     return parser.parse_args()
 
 
@@ -523,9 +525,20 @@ def build_annotation_text(surge_result):
     return "\n".join(lines)
 
 
+def design_point_caption(point, pr_type, label=""):
+    """Annotation text: heading with the source label, recorded performance, operating point."""
+    values = [] if point.get("efficiency_pct") is None else [f"η {point['efficiency_pct']:.1f} %"]
+    values += [f"{'Total' if pr_type == 'total' else 'Static'} PR {point['pressure_ratio']:.3f}",
+               f"{point['mass_flow_gs']:.2f} g/s"]
+    heading = "☆ Design point" + (f" · {label}" if label else "")
+    return "\n".join([heading, "  ·  ".join(values),
+                      f"{point['speed']:g} rpm, back pressure {point['target_pressure']:g} Pa"])
+
+
 def plot_map(grouped_points, output_path: Path, blade_count: float, surge_result,
-             pr_type="static", design_point=None):
+             pr_type="static", design_point=None, design_label=""):
     fig, ax = plt.subplots(figsize=(11.5, 7.2), constrained_layout=True)
+    fit_box = None
 
     all_efficiencies = [
         point["efficiency_pct"]
@@ -610,11 +623,10 @@ def plot_map(grouped_points, output_path: Path, blade_count: float, surge_result
             zorder=1,
             label=f"Surge prediction ({surge_result['display_name']})",
         )
-        ax.legend(loc="lower left", frameon=True, facecolor="white", edgecolor="#cccccc")
 
         annotation_text = build_annotation_text(surge_result)
         if annotation_text:
-            ax.text(
+            fit_box = ax.text(
                 0.02,
                 0.98,
                 annotation_text,
@@ -632,11 +644,29 @@ def plot_map(grouped_points, output_path: Path, blade_count: float, surge_result
 
     if design_point is not None:
         x, y = design_point["mass_flow_gs"], design_point["pressure_ratio"]
-        ax.scatter([x], [y], marker="*", s=220, color="#d62728", edgecolors="black", zorder=6)
-        ax.annotate("Design point", (x, y), xytext=(8, 10), textcoords="offset points")
+        ax.scatter([x], [y], marker="*", s=420, color="white", edgecolors="#111111", linewidths=1.4,
+                   zorder=6, label="Design point (optimization record)")
+        # Upper left lies beyond the surge line, where no map points fall; stack the
+        # caption under the fit equation instead of drawing a leader across the lines.
+        anchor = ({"xy": (0, 0), "xycoords": fit_box, "xytext": (0, -10), "textcoords": "offset points"}
+                  if fit_box is not None else {"xy": (0.02, 0.98), "xycoords": "axes fraction"})
+        ax.annotate(
+            design_point_caption(design_point, pr_type, design_label),
+            **anchor,
+            ha="left",
+            va="top",
+            fontsize=9.5,
+            color="#111111",
+            bbox={"boxstyle": "round,pad=0.35", "fc": "white", "ec": "#bbbbbb", "alpha": 0.92},
+            zorder=7,
+        )
+
+    if surge_points or design_point is not None:
+        # Below the axes so it never hides the low-speed lines in the lower left.
+        ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.09), ncol=3, frameon=False, fontsize=10.5)
 
     ax.set_title("Centrifugal Compressor Performance Map", fontsize=19, fontweight="bold", pad=10)
-    ax.set_xlabel("Mass Flow(g/s)", fontsize=13)
+    ax.set_xlabel("Mass Flow (g/s)", fontsize=13)
     ax.set_ylabel("Total Pressure Ratio (stationary frame)" if pr_type == "total"
                   else "Static Pressure Ratio", fontsize=13)
     ax.grid(True, linestyle="--", linewidth=0.8, alpha=0.3)
@@ -678,7 +708,7 @@ def main():
     all_filtered = [p for pts in grouped_points.values() for p in pts]
     surge_result = enforce_surge_boundary(surge_result, all_filtered)
     plot_map(grouped_points, Path(args.output), blade_count=args.blade_count, surge_result=surge_result,
-             pr_type=args.pr_type, design_point=design_point)
+             pr_type=args.pr_type, design_point=design_point, design_label=args.design_label)
 
     if comparison:
         print("Surge fit comparison")

@@ -25,3 +25,5 @@ __data_only_extract.csv
 Compressor_Map_Data.csv
 Extracted_Compressor_Data.csv
 Compressor_Map_With_Efficiency.png
+
+example-output/
