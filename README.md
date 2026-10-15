@@ -1,155 +1,145 @@
-# CFX 特性曲线扫描工具
+# workingmap：压气机特性图工具
 
-本仓库用于执行 ANSYS CFX 压缩机特性曲线扫点，并提供一个可在 Windows 下启动的中文 GUI 界面来配置扫描参数。
+workingmap 用来给一个压气机设计画出**特性图**（也叫工作图）：横轴是流量，纵轴是压比和效率，
+每条曲线对应一个转速，还会标出喘振边界和设计点。它调用 ANSYS CFX 在不同转速和出口背压下逐点计算，
+再把结果整理成表格并出图。程序带一个 Windows 下的中文图形界面，用来配置扫描、监控进度、一键出图。
 
-## 离线数值回归
+## 在整条链路中的位置
+
+```
+叶轮优化 / 叶片优化 ──→ 选定一个推荐设计 ──→ 性能评估（本仓库）──→ 特性图
+```
+
+- 前两个仓库（[叶轮优化](https://github.com/hibiki233i/cryogenic-compressor-impller-optimization)、
+  [叶片优化](https://github.com/hibiki233i/compressor_blade_optimizition)）给出推荐设计。
+- 本仓库把选定的设计变成一次完整的转速扫描，画出特性图，并在图上标出该设计所在位置。
+- 衔接这一步的是 `from_optimization.py`，用法见 [优化结果 → 特性图](docs/from_optimization.md)。
+
+## 两种使用方式，先分清
+
+| | 离线快速开始 | 真实 CFD 运行 |
+|---|---|---|
+| 适用系统 | macOS / Linux / Windows 都行 | **只能在 Windows 上**，且装有 ANSYS CFX |
+| 需要 CFX 吗 | 不需要 | 需要 |
+| 数据 | 仓库自带的合成数据 | 你自己的 CFD 结果 |
+| 能做什么 | 画图、转换优化结果、运行测试 | 真正扫描转速、得到特性图 |
+
+自带示例的数据都是合成的，**不是测量值，也不是 CFD 结果**。
+
+## 环境要求
+
+### Python
+
+- Python 3.11 或更新（自动测试用 3.11；作者在 macOS 上验证过 3.14）。
+- 依赖写在 `requirements.txt`：numpy 和 matplotlib。
+- 图形界面还要求 Python 带有 tkinter（Windows 的官方安装包默认带；部分 Linux 需要另外安装 `python3-tk`）。
+  只出图、不开界面则不需要。
+
+### 外部软件（真实 CFD 运行才需要）
+
+| 软件 | 已验证的版本 | 说明 |
+|---|---|---|
+| ANSYS CFX | 2025 R1（v251） | 需要能调用 `cfx5solve`、`cfdpost` |
+| PowerShell | 7 | 运行扫描和提取脚本 |
+| Windows | — | 以上流程的运行平台 |
+
+如果系统找不到 CFX 命令，可以在图形界面里填写 CFX 的 `bin` 目录，程序只在本次扫描中临时加入搜索路径。
+
+### 需要自备的模板（未随仓库提供）
+
+- 求解输入文件（`.def`）
+- 基础 CCL 文件（`.ccl`），其中必须包含两个扫描会改写的表达式：转速 `MySpeed` 和出口背压 `MyBackPressure`
+- 可选：作为初始流场的 `.res` 文件
+
+## 离线快速开始
+
+macOS / Linux：
 
 ```sh
-python -m pip install -r requirements.txt
-python -m unittest discover -s tests -v
-```
-
-GitHub Actions 在 Ubuntu + Python 3.11 上运行相同测试，无需 CFX 或桌面显示。
-`tests/test_numerical_regressions.py` 使用 POLA-3 入库的 `examples/compressor_map.csv`，
-同时比对静压比和总压比路径的喘振线系数、边界偏移和效率插值。
-静压比二次拟合系数为 `[0.1388888888888889, 0.3805555555555556, 0.6780555555555556]`，
-总压比拟合只把常数项增加 0.12；边界修正增加 0.0235。
-系数和效率百分数使用 `atol=1e-10, rtol=0`，容许浮点舍入而能检出拟合或单位换算变化。
-另一组手写的密集点及断开点检查裁剪后完整点集和顺序，覆盖原示例没有触发的抽稀路径。
-所有输入均为合成数据。
-
-手工验证敏感性：临时把 `build_candidate_result()` 中的拟合阶数设为 `degree = 1`，
-执行 `python -m unittest discover -s tests -p test_numerical_regressions.py -v`，
-系数比对应失败并返回非零；恢复原来的阶数解析后重跑应通过。
-
-## 主要文件
-
-- [cfx.ps1](cfx.ps1)：主扫描脚本，负责读取扫描配置并执行 CFX 求解与后处理。
-- [cfx_gui.py](cfx_gui.py)：中文图形界面，版本号为 `Version 2.0`。
-- [plot_compressor_map.py](plot_compressor_map.py)：压气机特性图绘制脚本，可由 GUI 自动或手动执行。
-- [start_cfx_gui.bat](start_cfx_gui.bat)：Windows 下一键启动 GUI。
-- [scan_points.csv](scan_points.csv)：默认扫描点配置文件。
-- [data_only.ps1](data_only.ps1)：对当前目录下全部 `.res` 批量提取到 `Extracted_Compressor_Data.csv`（可作为绘图的效率 CSV）。增量执行：已提取且 `.res` 未变化的结果会跳过，重新提取时覆盖同名记录，不会产生重复行；加 `-Force` 可强制全部重新提取。
-
-说明：
-- 仓库当前不再内置 `base.def` 和 `base.ccl` 模板文件。
-- 启动 GUI 或直接运行 `cfx.ps1` 前，需要自行提供有效的 `.def` 和 `.ccl` 文件路径。
-- 如需指定求解初场，可额外提供可选的 `.res` 文件路径。
-
-## GUI 启动
-
-在 Windows 下，双击：
-
-```bat
-start_cfx_gui.bat
-```
-
-或命令行执行：
-
-```bat
-py -3 cfx_gui.py
-```
-
-要求：
-
-- 已安装 Python 3
-- 启动脚本会依次尝试 `py`、`python`、`python3`
-- 如果 `PATH` 中没有 Python，启动脚本还会继续探测这些常见安装目录：
-  - `%LocalAppData%\Programs\Python\Python*`
-  - `%ProgramFiles%\Python\Python*`
-  - `%ProgramFiles(x86)%\Python\Python*`
-- 首次启动后，请在 GUI 中手动选择要使用的 `DEF` 与 `Base CCL` 文件
-- 如需从指定初场启动，可在 GUI 中选择可选的 `RES` 文件
-- 如果系统找不到 `cfx5solve` 或 `cfdpost`，可在 GUI 中填写 ANSYS CFX 的 `bin` 目录，程序会在本次扫描进程中临时加入 `PATH`
-- GUI 会记住上次填写的路径、核数、叶片数、流量单位、绘图路径、自动绘图选项以及窗口大小，保存在仓库目录下的 `.cfx_gui_settings.json`
-- GUI 提供“终止扫描”按钮；关闭窗口时若任务仍在运行，会先终止 PowerShell 脚本及其子进程
-- GUI 提供“绘制压气机图”按钮，可直接调用 `plot_compressor_map.py`；默认勾选“扫描完成后自动绘图”，扫描成功后会自动生成 PNG 图像
-- 绘图时会读取结果 CSV 中的 `Blade_Count`；新结果不会重复乘叶片数，旧结果缺少该列时会按 GUI 中的叶片数从单流道流量换算
-- 结果 CSV 会保存 `.res` 的修改时间与文件大小作为缓存指纹；同名 `.res` 被重新求解或覆盖后，主脚本会自动重新后处理并更新原记录
-- 一旦发现流量骤降、锁墙或发散点，该压力会成为失败上界；后续只在“最后稳定点—最低失败上界”之间二分细化，不再读取区间外的更高历史工况，也不会放宽已经确认的失败上界
-- 目标环境中可调用 PowerShell 和 ANSYS CFX 相关命令
-
-## GUI 使用要点（Version 2.0）
-
-- 左侧为输入/输出文件与参数，每个路径后的圆点表示校验状态：绿色正常、黄色提醒、红色错误、灰色未填（可选项），悬停可查看完整路径与说明
-- 相对路径统一以“工作目录”为基准解析；从资源管理器“复制为路径”粘贴的带引号路径也能识别
-- 扫描点表格：双击或 Enter 编辑，Tab / Shift+Tab 在单元格间跳转（末行 Tab 自动新增一行），可直接从 Excel 粘贴两列数据，右键可排序、清空；“批量生成…”按起止转速与步长生成扫描点；无效行以红色标出
-- `Ctrl+S` 保存扫描 CSV，`F5` 开始扫描；开始前会弹出确认框，汇总扫描范围及潜在问题（如找不到 cfx5solve、Base CCL 缺少 MySpeed/MyBackPressure、初始背压超过脚本安全上限、转速重复）
-- 扫描中表格会逐行显示“扫描中 / 已完成”，工具栏显示当前转速线、已提取工况点数，状态栏显示已运行时间；运行日志按错误/警告/成功着色并带时间戳，可复制或保存
-- 终止扫描后，若检测到未随进程树退出的 `solver-mpi.exe` 等 CFX 进程，会询问是否一并结束
-- 绘图可选择喘振线拟合方式（二次 / 一次多项式 / 自动），完成后可直接打开图像；“打开”菜单可快速打开工作目录、结果 CSV、特性图等
-- 窗口大小、分栏位置与各项参数会自动保存
-
-如果仍提示找不到 Python，优先检查 Windows 安装器是否勾选了 `Add python.exe to PATH`，然后重新打开终端或重新双击 `start_cfx_gui.bat`。
-
-## 扫描配置格式
-
-扫描配置使用 CSV，表头固定为：
-
-```csv
-SpeedRPM,InitialPressurePa
-```
-
-示例：
-
-```csv
-SpeedRPM,InitialPressurePa
-8000,5
-8500,5
-9000,5
-```
-
-每一行代表一个扫描转速点及其初始压力。GUI 中的“扫描数量”即表格行数。
-
-## 脚本参数
-
-`cfx.ps1` 支持以下入口参数：
-
-```powershell
--DefFile <string>
--BaseCclFile <string>
--InitialResFile <string>
--CsvFile <string>
--SpeedPressureTablePath <string>
--Cores <int>
--BladeCount <double>
--MassFlowUnit <string>
--WorkingDirectory <string>
-```
-
-说明：
-
-- `BladeCount` 用于把后处理读取到的单流道质量流量换算成整机流量。
-- `MassFlowUnit` 由用户显式选择，目前支持 `kg/s` 和 `g/s`。
-- 当前实现不再依赖从 `.res` 自动猜流量单位或叶片数，而是要求用户显式输入，稳定性更高。
-
-## 说明
-
-- `.gitignore` 已默认忽略常见结果文件、缓存文件和大体积输出。
-- 当前仓库保留核心脚本与 GUI 文件，模板输入文件需由使用方自行提供。
-
-## CSV 格式与离线绘图
-
-字段、流量单位、静压比/静止系总压比、旧表迁移和 Windows 验证步骤见 [数据格式规范](docs/data_format.md)。合成示例可直接出图：
-
-```bash
+python3 -m venv .venv
+source .venv/bin/activate
 python -m pip install -r requirements.txt
 python plot_compressor_map.py --input examples/compressor_map.csv --output out.png
-python plot_compressor_map.py --input examples/compressor_map.csv --output total.png --pr-type total --design-point examples/design_point.csv
 python -m unittest discover -s tests -v
-pwsh -NoProfile -File tests/test_map_data.ps1
 ```
 
-默认仍绘制静压比；优化结果对接使用 `--pr-type total`。GUI 在“求解与绘图参数 → 绘图压比”选择“静止系总压比”，设置会保存，并同时用于手动与自动绘图。设计点采用相同格式的一行 CSV。`Mass_Flow_kg_s` 始终是 kg/s，`Mass_Flow_Unit` 只记录提取时 CFD-Post 的原始单位。
+Windows（PowerShell；`py` 是 python.org 安装包自带的启动器）：
 
-移除了未被仓库调用的旧 `cfx_runner.py`（包含其他项目的硬编码路径）；扫描和提取继续使用 PowerShell 入口。
+```powershell
+py -3 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+python plot_compressor_map.py --input examples/compressor_map.csv --output out.png
+python -m unittest discover -s tests -v
+```
 
-## 从优化结果生成特性图
+如果 PowerShell 提示禁止运行脚本，可先执行 `Set-ExecutionPolicy -Scope Process RemoteSigned`（仅对当前窗口有效），
+或改用 `cmd` 并运行 `.venv\Scripts\activate.bat`。
 
-[from_optimization.py](from_optimization.py) 读取叶轮或叶片优化 Pareto 表中选定的一行，找到该点的 CFD 运行目录，生成 `scan_points.csv`、`base_map.ccl`（`MySpeed` / `MyBackPressure`）、`design_point.csv` 和记录来源的 `manifest.json`，manifest 中附带后续扫点和出图命令。离线示例一条命令跑通叶轮和叶片两条链路（合成数据）：
+前三行建好隔离的运行环境并安装依赖；第四行用自带的合成数据画一张特性图 `out.png`；最后一行运行全部自动测试。
 
-```bash
+再试几个常用变体：
+
+```sh
+# 用总压比画图，并标出设计点
+python plot_compressor_map.py --input examples/compressor_map.csv --output total.png \
+    --pr-type total --design-point examples/design_point.csv
+
+# 一条命令演示"优化结果 → 特性图"整条链路（叶轮和叶片两条，合成数据）
 python examples/from_optimization/run_example.py
 ```
 
-最终出图默认是论文风格的 (a) 静压比-流量、(b) 效率-流量双子图（`plot_compressor_map.py --style paper`）。参数、定位规则、口径和 Windows 真实运行步骤见 [优化结果 → 特性图](docs/from_optimization.md)。
+另有一项需要 PowerShell 7 和 Perl 的测试，可检查结果写入、缓存和单位换算（不需要 CFX）：
+
+```sh
+pwsh -NoProfile -File tests/test_map_data.ps1
+```
+
+## 真实 CFD 运行（Windows）
+
+1. 安装 Python、PowerShell 7 和 ANSYS CFX，并准备好自备的模板。
+2. 双击 `start_cfx_gui.bat` 打开界面（它会自动寻找 Python）。
+3. 在界面中选择 `.def` 和基础 `.ccl`，填写核数、叶片数、流量单位，编辑扫描点表格，点击开始。
+4. 扫描完成后自动生成特性图（可在设置里关闭）。
+
+完整的界面说明见 [图形界面使用指南](docs/gui_guide.md)。从优化结果开始的完整流程见
+[优化结果 → 特性图](docs/from_optimization.md)。
+
+## 仓库里有什么
+
+| 文件 / 目录 | 作用 |
+|---|---|
+| `cfx_gui.py`、`start_cfx_gui.bat` | 中文图形界面与一键启动脚本 |
+| `cfx.ps1` | 主扫描脚本：读取扫描点，调用 CFX 求解与后处理，把结果写入表格 |
+| `data_only.ps1` | 对目录下已有的 `.res` 文件批量提取结果，不重新求解 |
+| `extract_existing_map_data.ps1` | 重建旧结果表，提取口径与上面保持一致 |
+| `map_data.ps1` | 以上脚本共用的表格格式定义 |
+| `plot_compressor_map.py` | 画特性图 |
+| `from_optimization.py` | 把优化结果中的一个设计转换成扫描输入和设计点 |
+| `scan_points.csv` | 默认的扫描点配置 |
+| `examples/` | 合成示例数据，以及"优化结果 → 特性图"的完整演示 |
+| `docs/` | 详细文档（见下） |
+| `tests/` | 自动测试 |
+
+## 文档索引
+
+- [图形界面使用指南](docs/gui_guide.md)：界面怎么用，扫描过程怎么运作
+- [数据格式说明](docs/data_format.md)：扫描点表和结果表每一列的含义、单位换算、旧表迁移
+- [优化结果 → 特性图](docs/from_optimization.md)：如何由优化结果自动生成扫描输入和出图命令，以及 Windows 上的验证步骤
+- [演示示例说明](examples/from_optimization/README.md)：自带示例包含什么
+
+## 测试
+
+- `python -m unittest discover -s tests -v`：全部 Python 测试，不需要 CFX，也不需要桌面显示。
+  GUI 测试需要 tkinter，只检查设置保存和绘图命令，不会打开窗口。
+- 数值回归测试 `tests/test_numerical_regressions.py` 用入库的合成特性图，核对喘振边界拟合、
+  边界偏移和效率插值的数值，防止修改后结果悄悄改变。
+- GitHub Actions 在 Ubuntu + Python 3.11 上运行同样的测试。
+- 以上测试**不验证** CFX 许可证、真实网格、边界设置或求解收敛，这些需要在 Windows 工程机上手动验证。
+
+## 注意事项
+
+- 仓库不再带 `base.def` 和 `base.ccl`，需自行提供。
+- 图形界面的设置保存在仓库目录下的 `.cfx_gui_settings.json`，已被版本控制忽略。
+- 压比有"静压比"和"总压比"两种口径。默认画静压比；与优化目标对照时要用总压比（`--pr-type total`）。
+- 曲线修剪和喘振线拟合属于经验性做法，没有重新标定。
