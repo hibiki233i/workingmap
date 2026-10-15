@@ -658,8 +658,13 @@ def main():
 
     efficiency_path = Path(args.efficiency_input) if args.efficiency_input else None
     if efficiency_path is not None and efficiency_path.is_file():
-        efficiency_rows = load_rows(efficiency_path, blade_count=args.blade_count, pr_type=args.pr_type)
-        rows = interpolate_efficiency(rows, efficiency_rows)
+        try:
+            efficiency_rows = load_rows(efficiency_path, blade_count=args.blade_count, pr_type=args.pr_type)
+        except ValueError as exc:
+            # Optional input: an older table (e.g. without Total_PR) must not block the map.
+            warnings.warn(f"Ignoring efficiency CSV {efficiency_path}: {exc}")
+        else:
+            rows = interpolate_efficiency(rows, efficiency_rows)
 
     design_point = None
     if args.design_point:

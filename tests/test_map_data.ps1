@@ -34,6 +34,11 @@ try {
         Assert-Equal (Import-Csv $path).schema_version $expectedVersion
     }
 
+    # A failed total-ratio extraction must not be labelled as a complete v1 record.
+    $failed = [pscustomobject]@{ Result_File = 'Map_Speed_50000_Press_12.5.res'; Total_PR = '0.000000' }
+    Add-MapMetadata $failed
+    Assert-Equal $failed.schema_version ''
+
     # Load only functions from scan script: no solver or scan starts.
     $tokens = $null; $errors = $null
     $ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $repo 'cfx.ps1'), [ref]$tokens, [ref]$errors)
@@ -170,6 +175,30 @@ sub evaluate {
             $cached = Invoke-PostProcessForPoint 'custom.res'
             Assert-Equal $postCounter.Value ($callsBefore + 1)
             Assert-Equal $cached.Speed_RPM 45000
+
+            # Refreshes that cannot infer the operating point keep the manually supplied one.
+            & (Join-Path $repo 'data_only.ps1') -BladeCount 10 -MassFlowUnit 'g/s' -Force
+            $custom = Import-Csv 'Extracted_Compressor_Data.csv'
+            Assert-Equal $postCounter.Value ($callsBefore + 2)
+            Assert-Equal $custom.Speed_RPM 45000
+            Assert-Equal $custom.Back_Pressure_Pa 11
+            Assert-Equal $custom.schema_version '1'
+            (Get-Item 'custom.res').LastWriteTimeUtc = [datetime]::UtcNow.AddMinutes(5)
+            & (Join-Path $repo 'data_only.ps1') -BladeCount 10 -MassFlowUnit 'g/s'
+            Assert-Equal $postCounter.Value ($callsBefore + 3)
+            Assert-Equal (Import-Csv 'Extracted_Compressor_Data.csv').Speed_RPM 45000
+            & (Join-Path $repo 'extract_existing_map_data.ps1') -CsvFile 'Extracted_Compressor_Data.csv' -BladeCount 10 -MassFlowUnit 'g/s'
+            $custom = Import-Csv 'Extracted_Compressor_Data.csv'
+            Assert-Equal $custom.Speed_RPM 45000
+            Assert-Equal $custom.Back_Pressure_Pa 11
+            $custom.Total_PR = '0.000000'
+            $custom | Export-Csv $csvFile -NoTypeInformation
+            $callsBefore = $postCounter.Value
+            $refreshed = Invoke-PostProcessForPoint 'custom.res'
+            Assert-Equal $postCounter.Value ($callsBefore + 1)
+            Assert-Equal $refreshed.Speed_RPM 45000
+            Assert-Equal $refreshed.Back_Pressure_Pa 11
+            Assert-Equal $refreshed.schema_version '1'
         } finally { Pop-Location }
     } finally { Pop-Location }
     foreach ($file in Get-ChildItem $repo -Filter '*.ps1') {

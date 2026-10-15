@@ -94,6 +94,18 @@ class MapDataTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(output.read_bytes()[:8], b'\x89PNG\r\n\x1a\n')
 
+    def test_legacy_efficiency_csv_does_not_block_total_map(self):
+        legacy = Path(self.temp.name) / 'Extracted_Compressor_Data.csv'
+        legacy.write_text((ROOT / 'examples' / 'legacy_map.csv').read_text(encoding='utf-8'), encoding='utf-8')
+        output = Path(self.temp.name) / 'total.png'
+        result = subprocess.run([sys.executable, str(ROOT / 'plot_compressor_map.py'),
+            '--input', str(ROOT / 'examples' / 'compressor_map.csv'), '--output', str(output),
+            '--efficiency-input', str(legacy), '--pr-type', 'total'],
+            capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('Ignoring efficiency CSV', result.stderr)
+        self.assertEqual(output.read_bytes()[:8], b'\x89PNG\r\n\x1a\n')
+
 
 if __name__ == '__main__':
     unittest.main()

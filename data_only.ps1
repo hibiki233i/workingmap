@@ -8,7 +8,9 @@ param(
     [double]$BladeCount = 1.0,
     [string]$MassFlowUnit = "kg/s",
     [string]$CsvFile = "Extracted_Compressor_Data.csv",
-    [switch]$Force
+    [switch]$Force,
+    # Optional older table (e.g. a rebuild backup) used only to carry over operating points.
+    [string]$MetadataCsv
 )
 
 . (Join-Path $PSScriptRoot "map_data.ps1")
@@ -106,6 +108,14 @@ if (Test-Path -LiteralPath $CsvFile) {
     }
 }
 
+$metadataRecords = @{}
+if ($MetadataCsv -and (Test-Path -LiteralPath $MetadataCsv)) {
+    foreach ($row in @(Import-Csv -LiteralPath $MetadataCsv)) {
+        $name = Get-FieldText $row "Result_File"
+        if ($name) { $metadataRecords[$name] = $row }
+    }
+}
+
 Write-Host "找到 $($resFiles.Count) 个结果文件，已有记录 $($records.Count) 条，准备开始提取..." -ForegroundColor Cyan
 if ($Force) {
     Write-Host "已指定 -Force，将重新提取全部结果文件。" -ForegroundColor Yellow
@@ -188,6 +198,8 @@ foreach ($file in $resFiles) {
 
     $record | Add-Member -NotePropertyName Result_LastWriteUtcTicks -NotePropertyValue ([string]$file.LastWriteTimeUtc.Ticks) -Force
     $record | Add-Member -NotePropertyName Result_Size_Bytes -NotePropertyValue ([string]$file.Length) -Force
+    $previous = if ($records.Contains($resFileName)) { $records[$resFileName] } else { $metadataRecords[$resFileName] }
+    Copy-MapOperatingPoint $record $previous
     Add-MapMetadata $record
     $records[$resFileName] = $record
     $extractedCount++

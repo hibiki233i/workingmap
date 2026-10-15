@@ -27,8 +27,23 @@ function Add-MapMetadata {
     }
     # Only fill an absent version; explicit versions keep their original semantics.
     if ([string]::IsNullOrWhiteSpace([string]$Record.schema_version) -and
-        $Record.Total_PR -and $Record.Speed_RPM -and ([string]$Record.Back_Pressure_Pa -ne '')) {
+        (Test-MapTotalRatio ([string]$Record.Total_PR)) -and $Record.Speed_RPM -and
+        ([string]$Record.Back_Pressure_Pa -ne '')) {
         $Record.schema_version = '1'
+    }
+}
+
+# A re-extracted record only carries physics; keep operating points the previous row already had
+# (e.g. filled by hand for arbitrarily named results). Call before Add-MapMetadata.
+function Copy-MapOperatingPoint {
+    param([object]$Record, [object]$Previous)
+    if ($null -eq $Previous) { return }
+    foreach ($name in @('Speed_RPM', 'Back_Pressure_Pa')) {
+        $old = if ($Previous.PSObject.Properties.Name -contains $name) { [string]$Previous.$name } else { '' }
+        $new = if ($Record.PSObject.Properties.Name -contains $name) { [string]$Record.$name } else { '' }
+        if ([string]::IsNullOrWhiteSpace($new) -and -not [string]::IsNullOrWhiteSpace($old)) {
+            $Record | Add-Member -NotePropertyName $name -NotePropertyValue $old.Trim() -Force
+        }
     }
 }
 

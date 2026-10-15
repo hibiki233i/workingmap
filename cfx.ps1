@@ -615,6 +615,7 @@ function Invoke-PostProcessForPoint {
     $resultLastWriteUtcTicks = $resultInfo.LastWriteTimeUtc.Ticks
     $resultSizeBytes = $resultInfo.Length
     $cached = Get-CsvRecordByResultFile -Path $csvFile -ResultFile $ResultFile
+    $previousRecord = $cached
     if ($null -ne $cached) {
         if (-not (Test-MapTotalRatio ([string]$cached.Total_PR))) {
             $cached = $null
@@ -717,6 +718,7 @@ function Invoke-PostProcessForPoint {
         return $null
     }
 
+    Copy-MapOperatingPoint $record $previousRecord
     Add-MapMetadata $record
     return [pscustomobject]@{
         Result_File = $record.Result_File
